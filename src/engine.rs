@@ -1,5 +1,7 @@
 use std::io::{self, Write};
 use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 use crate::bench::BENCH_FENS;
 use crate::board::Board;
@@ -54,9 +56,18 @@ impl Engine {
                 continue;
             }
             let result = self.search(command.search_options.clone(), true, command.epoch);
+            let delayed_exit = if result.exit == SearchExit::Quit {
+                SearchExit::Quit
+            } else {
+                self.wait_until_bestmove_allowed(
+                    &command.search_options,
+                    command.epoch,
+                    result.ponderhit,
+                )
+            };
             self.control.finish_search_if_current(command.epoch);
             print_bestmove(&result);
-            if result.exit == SearchExit::Quit {
+            if result.exit == SearchExit::Quit || delayed_exit == SearchExit::Quit {
                 break;
             }
         }
@@ -94,6 +105,30 @@ impl Engine {
                 SearchControl::None => SearchEvent::None,
             },
         )
+    }
+
+    fn wait_until_bestmove_allowed(
+        &self,
+        options: &SearchOptions,
+        epoch: u64,
+        ponderhit_seen: bool,
+    ) -> SearchExit {
+        let waiting_on_ponder = options.limits.ponder && !ponderhit_seen;
+        if !waiting_on_ponder && !options.limits.infinite {
+            return SearchExit::Stop;
+        }
+
+        loop {
+            match self.control.poll_search() {
+                SearchControl::Quit => return SearchExit::Quit,
+                SearchControl::Stop | SearchControl::PonderHit => return SearchExit::Stop,
+                SearchControl::None => thread::sleep(Duration::from_millis(1)),
+            }
+
+            if epoch != 0 && self.control.current_epoch() != epoch {
+                return SearchExit::Stop;
+            }
+        }
     }
 
     fn run_bench(&mut self, depth: u16, base_options: &SearchOptions, epoch: u64) -> SearchExit {
@@ -182,6 +217,7 @@ fn print_bestmove(result: &SearchResult) {
     } else {
         println!("bestmove {} ponder {}", result.bestmove, result.pondermove);
     }
+    flush_stdout();
 }
 
 fn flush_stdout() {
@@ -191,6 +227,8 @@ fn flush_stdout() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     fn engine_fixture() -> (Engine, EngineCommandQueue, Arc<EngineControl>) {
         let commands = EngineCommandQueue::default();
@@ -244,5 +282,89 @@ mod tests {
         assert_eq!(result.exit, SearchExit::Quit);
         assert!(result.nodes >= 512, "nodes: {}", result.nodes);
         assert!(result.depth < 99);
+    }
+
+    #[test]
+    fn bestmove_wait_releases_infinite_search_on_stop() {
+        let (engine, _commands, control) = engine_fixture();
+        let mut options = SearchOptions::default();
+        options.limits.infinite = true;
+
+        control.request_stop();
+
+        assert_eq!(
+            engine.wait_until_bestmove_allowed(&options, 0, false),
+            SearchExit::Stop
+        );
+    }
+
+    #[test]
+    fn bestmove_wait_releases_infinite_search_on_quit() {
+        let (engine, _commands, control) = engine_fixture();
+        let mut options = SearchOptions::default();
+        options.limits.infinite = true;
+
+        control.request_quit();
+
+        assert_eq!(
+            engine.wait_until_bestmove_allowed(&options, 0, false),
+            SearchExit::Quit
+        );
+    }
+
+    #[test]
+    fn bestmove_wait_does_not_rewait_after_ponderhit_seen_by_search() {
+        let (engine, _commands, _control) = engine_fixture();
+        let mut options = SearchOptions::default();
+        options.limits.ponder = true;
+
+        assert_eq!(
+            engine.wait_until_bestmove_allowed(&options, 0, true),
+            SearchExit::Stop
+        );
+    }
+
+    #[test]
+    fn bestmove_wait_blocks_ponder_search_until_ponderhit() {
+        let (engine, _commands, control) = engine_fixture();
+        let mut options = SearchOptions::default();
+        options.limits.ponder = true;
+        let (done_tx, done_rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let exit = engine.wait_until_bestmove_allowed(&options, 0, false);
+            done_tx.send(exit).expect("wait result should be sent");
+        });
+
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        control.request_ponderhit();
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("ponderhit should release the wait"),
+            SearchExit::Stop
+        );
+    }
+
+    #[test]
+    fn bestmove_wait_blocks_infinite_search_until_stop() {
+        let (engine, _commands, control) = engine_fixture();
+        let mut options = SearchOptions::default();
+        options.limits.infinite = true;
+        let (done_tx, done_rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let exit = engine.wait_until_bestmove_allowed(&options, 0, false);
+            done_tx.send(exit).expect("wait result should be sent");
+        });
+
+        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        control.request_stop();
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("stop should release the wait"),
+            SearchExit::Stop
+        );
     }
 }

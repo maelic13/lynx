@@ -1,4 +1,4 @@
-use std::io;
+use std::io::{self, Write};
 use std::sync::{Arc, mpsc};
 
 use crate::bench::DEFAULT_BENCH_DEPTH;
@@ -68,6 +68,7 @@ impl UciProtocol {
             println!("{}", option);
         }
         println!("uciok");
+        flush_stdout();
     }
 
     fn is_ready(&self) {
@@ -77,6 +78,7 @@ impl UciProtocol {
             let _ = ready_rx.recv();
         }
         println!("readyok");
+        flush_stdout();
     }
 
     fn quit(&self) {
@@ -131,6 +133,10 @@ impl UciProtocol {
         self.control.request_ponderhit();
         self.commands.push(EngineCommand::ponderhit());
     }
+}
+
+fn flush_stdout() {
+    io::stdout().flush().expect("stdout flush failed");
 }
 
 #[cfg(test)]

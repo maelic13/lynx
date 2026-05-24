@@ -2,6 +2,28 @@
 
 All notable changes to Lynx are documented in this file.
 
+## [1.0.1] - 2026-05-23
+
+Patch release focused on UCI tournament reliability.
+
+### Fixed
+
+- Delayed `bestmove` emission for completed `go ponder ...` searches until
+  `ponderhit`, `stop`, or `quit`, matching the Stockfish-style UCI control flow
+  where a completed ponder result is retained but not reported early.
+- Delayed `bestmove` emission for completed `go infinite` searches until
+  `stop` or `quit`.
+- Preserved the `ponder` flag when parsing combined `go ponder infinite`
+  commands.
+- Flushed UCI `uciok`, `readyok`, and `bestmove` replies immediately for
+  pipe-based GUIs and tournament managers.
+
+### Added
+
+- Regression tests covering UCI ponder and infinite bestmove-release behavior.
+- Search and option-parser coverage for ponderhit conversion, infinite search
+  limits, and temporary limit reset behavior.
+
 ## [1.0.0] - 2026-05-22
 
 Initial Lynx release.

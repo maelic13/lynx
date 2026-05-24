@@ -121,6 +121,7 @@ The suite covers:
 - Threaded search node-limit handling
 - UCI command ordering, priority quit/stop handling, and stale-search
   cancellation
+- UCI ponder and infinite-search `bestmove` release timing
 - Quiet/capture move-generation partitioning
 - Evaluation and transposition table behavior
 - UCI command handling
@@ -136,6 +137,8 @@ Tested GUI families include Arena, ChessBase/Fritz, ChessOK Aquarium, and
 Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
 ## Releases
+
+Current documented release: `1.0.1`.
 
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)

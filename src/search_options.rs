@@ -44,6 +44,7 @@ pub struct SearchLimits {
     pub depth: f64,
     pub movestogo: usize,
     pub nodes: u64,
+    pub infinite: bool,
     pub ponder: bool,
 }
 
@@ -57,6 +58,7 @@ impl SearchLimits {
         self.depth = f64::INFINITY;
         self.movestogo = 0;
         self.nodes = 0;
+        self.infinite = false;
         self.ponder = false;
     }
 }
@@ -72,6 +74,7 @@ impl Default for SearchLimits {
             depth: f64::INFINITY,
             movestogo: 0,
             nodes: 0,
+            infinite: false,
             ponder: false,
         }
     }
@@ -152,9 +155,12 @@ impl SearchOptions {
     pub fn set_search_parameters(&mut self, args: &[String]) {
         self.limits.reset_temporary_parameters();
 
+        self.limits.ponder = args.iter().any(|r| r == "ponder");
+
         let infinite_index = args.iter().position(|r| r == "infinite");
         if infinite_index.is_some() {
             self.limits.depth = f64::INFINITY;
+            self.limits.infinite = true;
             return;
         }
 
@@ -170,8 +176,6 @@ impl SearchOptions {
         let depth_index = args.iter().position(|r| r == "depth");
         let movestogo_index = args.iter().position(|r| r == "movestogo");
         let nodes_index = args.iter().position(|r| r == "nodes");
-
-        self.limits.ponder = args.iter().any(|r| r == "ponder");
 
         if let Some(index) = move_time_index {
             self.limits.move_time = Self::parse_usize(args, index, "movetime");

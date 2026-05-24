@@ -59,6 +59,17 @@ fn search_options_parse_startpos_moves_and_go_limits() {
     assert_eq!(options.limits.nodes, 12_345);
     assert_eq!(options.limits.depth, 7.0);
     assert!(options.limits.ponder);
+    assert!(!options.limits.infinite);
+
+    options.set_search_parameters(&args(&["ponder", "infinite"]));
+    assert!(options.limits.ponder);
+    assert!(options.limits.infinite);
+    assert_eq!(options.limits.depth, f64::INFINITY);
+
+    options.set_search_parameters(&args(&["depth", "3"]));
+    assert!(!options.limits.ponder);
+    assert!(!options.limits.infinite);
+    assert_eq!(options.limits.depth, 3.0);
 }
 
 #[test]
@@ -87,6 +98,7 @@ fn search_options_setoption_and_reset_cover_engine_configuration() {
     assert_eq!(options.limits.nodes, 0);
     assert_eq!(options.limits.move_time, 0);
     assert!(!options.limits.ponder);
+    assert!(!options.limits.infinite);
     assert_eq!(options.engine.hash_mb, 256);
     assert_eq!(options.engine.move_overhead, 25.0);
 
@@ -325,5 +337,30 @@ fn search_quit_event_exits_search() {
     assert_eq!(result.exit, SearchExit::Quit);
     assert!(polls > 0);
     assert!(result.nodes >= 512, "nodes: {}", result.nodes);
+    assert!(result.depth < 99);
+}
+
+#[test]
+fn search_result_records_ponderhit_conversion() {
+    let mut searcher = Searcher::default();
+    let mut options = SearchOptions::default();
+    options.limits.depth = 99.0;
+    options.limits.nodes = 4_096;
+    options.limits.ponder = true;
+
+    let mut polls = 0;
+    let result = searcher.search(options.position.board.clone(), &options, false, || {
+        polls += 1;
+        if polls == 1 {
+            SearchEvent::PonderHit
+        } else {
+            SearchEvent::None
+        }
+    });
+
+    assert_eq!(result.exit, SearchExit::Stop);
+    assert!(result.ponderhit);
+    assert!(polls > 0);
+    assert!(result.nodes >= 4_096, "nodes: {}", result.nodes);
     assert!(result.depth < 99);
 }

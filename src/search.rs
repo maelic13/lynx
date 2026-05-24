@@ -52,6 +52,7 @@ pub struct SearchResult {
     pub nodes: u64,
     pub elapsed_ms: u128,
     pub exit: SearchExit,
+    pub ponderhit: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -70,6 +71,7 @@ pub struct Searcher {
     stopped: bool,
     quit: bool,
     pondering: bool,
+    ponderhit: bool,
     start: Instant,
     limits: RuntimeLimits,
     pv_table: [[Move; MAX_PLY]; MAX_PLY],
@@ -99,6 +101,7 @@ impl Default for Searcher {
             stopped: false,
             quit: false,
             pondering: false,
+            ponderhit: false,
             start: Instant::now(),
             limits: RuntimeLimits {
                 depth: MAX_DEPTH,
@@ -269,6 +272,7 @@ impl Searcher {
         self.stopped = false;
         self.quit = false;
         self.pondering = limits.ponder;
+        self.ponderhit = false;
         self.limits = compute_runtime_limits(limits, engine_options, side_to_move, MAX_DEPTH);
         if age_tt {
             self.tt.new_search();
@@ -294,6 +298,7 @@ impl Searcher {
             nodes: 0,
             elapsed_ms: self.start.elapsed().as_millis(),
             exit: SearchExit::Stop,
+            ponderhit: self.ponderhit,
         }
     }
 
@@ -398,6 +403,7 @@ impl Searcher {
             } else {
                 SearchExit::Stop
             },
+            ponderhit: self.ponderhit,
         }
     }
 
@@ -501,12 +507,14 @@ impl Searcher {
                 nodes: 0,
                 elapsed_ms: self.start.elapsed().as_millis(),
                 exit: SearchExit::Stop,
+                ponderhit: self.ponderhit,
             });
         self.nodes = total_nodes;
         self.quit = quit;
         self.stopped = true;
         best.nodes = total_nodes;
         best.elapsed_ms = self.start.elapsed().as_millis();
+        best.ponderhit = self.ponderhit || helper_results.iter().any(|result| result.ponderhit);
         best.exit = if quit {
             SearchExit::Quit
         } else {
@@ -1338,6 +1346,7 @@ impl Searcher {
                 }
                 SearchEvent::PonderHit => {
                     self.pondering = false;
+                    self.ponderhit = true;
                     self.start = Instant::now();
                 }
                 SearchEvent::None => {}
