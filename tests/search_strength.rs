@@ -42,6 +42,15 @@ fn search_prefers_winning_hanging_queen() {
 }
 
 #[test]
+fn search_prefers_safer_interposition_from_sampled_loss_line() {
+    let board =
+        Board::from_fen("rnbqkbnr/ppp2ppp/8/1B1P4/4p3/5N2/PPPP1PPP/RNBQK2R b KQkq - 1 4").unwrap();
+
+    let result = search_at_depth(board, 4);
+    assert_eq!(result.to_string(), "c7c6");
+}
+
+#[test]
 fn fixed_depth_single_thread_search_is_repeatable() {
     let board = Board::default();
     let first = search_result_at_depth_with_threads(board.clone(), 4, 1);

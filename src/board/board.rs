@@ -391,11 +391,60 @@ impl Board {
         mv.is_en_passant()
     }
 
-    pub fn gives_check(&mut self, mv: Move) -> bool {
-        self.make_move(mv);
-        let gives_check = self.is_in_check();
-        self.unmake_move(mv);
-        gives_check
+    pub fn gives_check(&self, mv: Move) -> bool {
+        if mv.is_castling() {
+            let mut board = self.clone();
+            board.make_move(mv);
+            return board.is_in_check();
+        }
+
+        let us = self.side_to_move;
+        let them = !us;
+        let from = mv.from_sq();
+        let to = mv.to_sq();
+        let from_bb = Bitboard::from(from);
+        let to_bb = Bitboard::from(to);
+        let their_king = self.king_sq(them);
+        let their_king_bb = Bitboard::from(their_king);
+        let atk = &*ATTACKS;
+
+        let moving_piece = if mv.is_promo() {
+            mv.promo_piece()
+        } else {
+            self.moving_piece(mv)
+        };
+
+        let mut occ = (self.all_occ ^ from_bb) | to_bb;
+        if mv.is_en_passant() {
+            let cap_sq = if us == Color::White {
+                Square(to.0 - 8)
+            } else {
+                Square(to.0 + 8)
+            };
+            occ ^= Bitboard::from(cap_sq);
+        }
+
+        let direct = match moving_piece {
+            Piece::Pawn => (atk.pawn(us, to) & their_king_bb).any(),
+            Piece::Knight => (atk.knight(to) & their_king_bb).any(),
+            Piece::Bishop => (atk.bishop(to, occ) & their_king_bb).any(),
+            Piece::Rook => (atk.rook(to, occ) & their_king_bb).any(),
+            Piece::Queen => (atk.queen(to, occ) & their_king_bb).any(),
+            Piece::King => false,
+        };
+        if direct {
+            return true;
+        }
+
+        let diagonal_sliders =
+            (self.pieces(us, Piece::Bishop) | self.pieces(us, Piece::Queen)) & !from_bb;
+        if (atk.bishop(their_king, occ) & diagonal_sliders).any() {
+            return true;
+        }
+
+        let orthogonal_sliders =
+            (self.pieces(us, Piece::Rook) | self.pieces(us, Piece::Queen)) & !from_bb;
+        (atk.rook(their_king, occ) & orthogonal_sliders).any()
     }
 
     pub fn can_declare_draw(&self) -> bool {

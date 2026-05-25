@@ -203,6 +203,24 @@ mod tests {
                 .clear_hash
         );
         assert!(!protocol.search_options.engine.clear_hash);
+
+        protocol.set_option(&args(&[
+            "name",
+            "SyzygyPath",
+            "value",
+            "D:\\TB",
+            "MixedCase",
+        ]));
+        let syzygy_command = commands.wait_pop();
+        assert_eq!(
+            syzygy_command
+                .configure
+                .expect("syzygy path command must configure engine")
+                .engine
+                .syzygy
+                .path,
+            "D:\\TB MixedCase"
+        );
     }
 
     #[test]

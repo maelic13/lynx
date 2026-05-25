@@ -2,6 +2,31 @@
 
 All notable changes to Lynx are documented in this file.
 
+## [1.1.0] - 2026-05-25
+
+### Added
+
+- Added optional Syzygy tablebase support using the vendored Fathom probe
+  library, with UCI options for path, probe depth, probe limit, and
+  fifty-move-rule handling.
+- Added tests for Syzygy option parsing, Fathom result decoding, disabled-path
+  probing, root move conversion, and malformed path handling.
+
+### Changed
+
+- Improved search selectivity and speed with faster check detection, stronger
+  stale-TT internal iterative reduction, deeper null-move reductions,
+  check-aware pruning, and adjusted late move reductions.
+- Improved tactical reliability by continuing quiescence search through check
+  evasions instead of falling back to static evaluation while in check.
+- Stored ProbCut lower bounds in the transposition table to improve move
+  ordering and cut reuse.
+
+### Fixed
+
+- Reduced the risk of illegal or tactically losing search choices from
+  over-pruning checking moves and check evasions.
+
 ## [1.0.2] - 2026-05-25
 
 ### Changed

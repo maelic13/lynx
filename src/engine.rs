@@ -162,7 +162,7 @@ impl Engine {
             let mut options = SearchOptions::default();
             options.position.board = board;
             options.limits.depth = depth as f64;
-            options.engine = base_options.engine;
+            options.engine = base_options.engine.clone();
 
             let result = self.search(options, false, epoch);
             total_nodes += result.nodes;

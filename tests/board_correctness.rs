@@ -110,6 +110,39 @@ fn legal_quiets_and_captures_partition_all_legal_moves() {
 }
 
 #[test]
+fn gives_check_detects_direct_and_discovered_checks_without_mutating_board() {
+    let direct = Board::from_fen("7k/8/8/8/8/8/K7/R7 w - - 0 1").unwrap();
+    let direct_hash = direct.hash;
+    let rook_check = direct.parse_move("a1h1").unwrap();
+    assert!(direct.gives_check(rook_check));
+    assert_eq!(direct.hash, direct_hash);
+
+    let discovered = Board::from_fen("4k3/8/8/8/8/8/K3N3/4R3 w - - 0 1").unwrap();
+    let discovered_hash = discovered.hash;
+    let discovered_check = discovered.parse_move("e2c1").unwrap();
+    assert!(discovered.gives_check(discovered_check));
+    assert_eq!(discovered.hash, discovered_hash);
+
+    let quiet = Board::from_fen(STARTING_FEN).unwrap();
+    let quiet_hash = quiet.hash;
+    let non_check = quiet.parse_move("e2e4").unwrap();
+    assert!(!quiet.gives_check(non_check));
+    assert_eq!(quiet.hash, quiet_hash);
+}
+
+#[test]
+fn gives_check_matches_make_move_check_state_for_curated_positions() {
+    for fen in ORACLE_FENS {
+        let board = Board::from_fen(fen).unwrap_or_else(|err| panic!("{fen}: {err}"));
+        for mv in board.generate_legal_moves() {
+            let mut after = board.clone();
+            after.make_move(mv);
+            assert_eq!(board.gives_check(mv), after.is_in_check(), "{fen}: {mv}");
+        }
+    }
+}
+
+#[test]
 fn check_detection_matches_hand_checked_positions() {
     let cases = [
         ("4k3/8/8/8/8/2b5/4r3/4K3 w - - 0 1", true, 2),

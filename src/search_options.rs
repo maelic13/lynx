@@ -2,12 +2,32 @@ use crate::board::{Board, Move};
 
 pub const MAX_THREADS: usize = 1024;
 
-#[derive(Copy, Clone)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct SyzygyOptions {
+    pub path: String,
+    pub probe_depth: i32,
+    pub probe_limit: usize,
+    pub fifty_move_rule: bool,
+}
+
+impl Default for SyzygyOptions {
+    fn default() -> Self {
+        Self {
+            path: String::new(),
+            probe_depth: 1,
+            probe_limit: 7,
+            fifty_move_rule: true,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct EngineOptions {
     pub move_overhead: f64,
     pub hash_mb: usize,
     pub clear_hash: bool,
     pub threads: usize,
+    pub syzygy: SyzygyOptions,
 }
 
 impl Default for EngineOptions {
@@ -17,6 +37,7 @@ impl Default for EngineOptions {
             hash_mb: 64,
             clear_hash: false,
             threads: 1,
+            syzygy: SyzygyOptions::default(),
         }
     }
 }
@@ -94,6 +115,10 @@ impl SearchOptions {
             String::from("option name Clear Hash type button"),
             String::from("option name Move Overhead type spin default 10 min 0 max 5000"),
             format!("option name Threads type spin default 1 min 1 max {MAX_THREADS}"),
+            String::from("option name SyzygyPath type string default"),
+            String::from("option name SyzygyProbeDepth type spin default 1 min 1 max 100"),
+            String::from("option name SyzygyProbeLimit type spin default 7 min 0 max 7"),
+            String::from("option name Syzygy50MoveRule type check default true"),
         ])
     }
 
@@ -222,9 +247,10 @@ impl SearchOptions {
         let option_name: &str = &args[name_index.unwrap() + 1..name_end]
             .join(" ")
             .to_lowercase();
-        let value = value_index
-            .map(|index| args[index + 1..].join(" ").to_lowercase())
+        let value_raw = value_index
+            .map(|index| args[index + 1..].join(" "))
             .unwrap_or_default();
+        let value = value_raw.to_lowercase();
 
         match option_name {
             "hash" => {
@@ -254,6 +280,28 @@ impl SearchOptions {
                     println!("info string Invalid Threads value.");
                 }
             }
+            "syzygypath" => {
+                self.engine.syzygy.path = value_raw;
+            }
+            "syzygyprobedepth" => {
+                if let Ok(depth) = value.parse::<i32>() {
+                    self.engine.syzygy.probe_depth = depth.clamp(1, 100);
+                } else {
+                    println!("info string Invalid SyzygyProbeDepth value.");
+                }
+            }
+            "syzygyprobelimit" => {
+                if let Ok(limit) = value.parse::<usize>() {
+                    self.engine.syzygy.probe_limit = limit.clamp(0, 7);
+                } else {
+                    println!("info string Invalid SyzygyProbeLimit value.");
+                }
+            }
+            "syzygy50moverule" => match value.as_str() {
+                "true" => self.engine.syzygy.fifty_move_rule = true,
+                "false" => self.engine.syzygy.fifty_move_rule = false,
+                _ => println!("info string Invalid Syzygy50MoveRule value."),
+            },
             _ => {}
         }
     }

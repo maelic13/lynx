@@ -3,6 +3,7 @@ use lynx::engine_command::EngineCommand;
 use lynx::eval::{Evaluator, MATE_SCORE, piece_value};
 use lynx::search::{SearchEvent, SearchExit, Searcher};
 use lynx::search_options::SearchOptions;
+use lynx::syzygy;
 use lynx::tt::{Bound, TranspositionTable, score_from_tt, score_to_tt};
 
 fn args(parts: &[&str]) -> Vec<String> {
@@ -79,11 +80,19 @@ fn search_options_setoption_and_reset_cover_engine_configuration() {
     options.set_option(&args(&["name", "Hash", "value", "256"]));
     options.set_option(&args(&["name", "Move", "Overhead", "value", "25"]));
     options.set_option(&args(&["name", "Threads", "value", "99"]));
+    options.set_option(&args(&["name", "SyzygyPath", "value", "C:\\TB\\WDL"]));
+    options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "6"]));
+    options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "5"]));
+    options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "false"]));
     options.set_option(&args(&["name", "Clear", "Hash"]));
 
     assert_eq!(options.engine.hash_mb, 256);
     assert_eq!(options.engine.move_overhead, 25.0);
     assert_eq!(options.engine.threads, 99);
+    assert_eq!(options.engine.syzygy.path, "C:\\TB\\WDL");
+    assert_eq!(options.engine.syzygy.probe_depth, 6);
+    assert_eq!(options.engine.syzygy.probe_limit, 5);
+    assert!(!options.engine.syzygy.fifty_move_rule);
     assert!(options.engine.clear_hash);
 
     options.set_option(&args(&["name", "Threads", "value", "9999"]));
@@ -101,12 +110,52 @@ fn search_options_setoption_and_reset_cover_engine_configuration() {
     assert!(!options.limits.infinite);
     assert_eq!(options.engine.hash_mb, 256);
     assert_eq!(options.engine.move_overhead, 25.0);
+    assert_eq!(options.engine.syzygy.path, "C:\\TB\\WDL");
 
     let names = SearchOptions::get_uci_options().join("\n");
     assert!(names.contains("option name Hash"));
     assert!(names.contains("option name Move Overhead"));
     assert!(names.contains("option name Threads type spin default 1 min 1 max 1024"));
     assert!(names.contains("option name Clear Hash"));
+    assert!(names.contains("option name SyzygyPath"));
+    assert!(names.contains("option name SyzygyProbeDepth"));
+    assert!(names.contains("option name SyzygyProbeLimit"));
+    assert!(names.contains("option name Syzygy50MoveRule"));
+}
+
+#[test]
+fn search_options_clamp_syzygy_values_and_preserve_raw_path() {
+    let mut options = SearchOptions::default();
+
+    options.set_option(&args(&[
+        "name",
+        "SyzygyPath",
+        "value",
+        "C:\\TB",
+        "Mixed Case",
+    ]));
+    options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "0"]));
+    options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "99"]));
+    options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "false"]));
+
+    assert_eq!(options.engine.syzygy.path, "C:\\TB Mixed Case");
+    assert_eq!(options.engine.syzygy.probe_depth, 1);
+    assert_eq!(options.engine.syzygy.probe_limit, 7);
+    assert!(!options.engine.syzygy.fifty_move_rule);
+
+    options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "250"]));
+    options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "0"]));
+    options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "maybe"]));
+
+    assert_eq!(options.engine.syzygy.probe_depth, 100);
+    assert_eq!(options.engine.syzygy.probe_limit, 0);
+    assert!(
+        !options.engine.syzygy.fifty_move_rule,
+        "invalid boolean value must leave the previous setting unchanged"
+    );
+
+    options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "true"]));
+    assert!(options.engine.syzygy.fifty_move_rule);
 }
 
 #[test]
@@ -224,6 +273,16 @@ fn evaluator_scores_material_from_side_to_move_perspective() {
 
     assert!(evaluator.evaluate(&white_to_move) > piece_value(Piece::Queen) - 100);
     assert!(evaluator.evaluate(&black_to_move) < -piece_value(Piece::Queen) + 100);
+}
+
+#[test]
+fn syzygy_disabled_path_leaves_tablebase_probes_unavailable() {
+    let board = Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
+
+    assert_eq!(syzygy::initialize(""), 0);
+    assert_eq!(syzygy::largest(), 0);
+    assert!(syzygy::probe_wdl(&board, true).is_none());
+    assert!(syzygy::probe_root(&board, true).is_none());
 }
 
 #[test]

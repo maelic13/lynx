@@ -8,6 +8,7 @@ mod move_ordering;
 pub mod search;
 pub mod search_options;
 mod search_threads;
+pub mod syzygy;
 mod time_manager;
 pub mod tt;
 pub mod uci_protocol;

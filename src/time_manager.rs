@@ -11,7 +11,7 @@ pub(crate) struct RuntimeLimits {
 
 pub(crate) fn compute_runtime_limits(
     options: SearchLimits,
-    engine_options: EngineOptions,
+    engine_options: &EngineOptions,
     side_to_move: Color,
     max_depth: usize,
 ) -> RuntimeLimits {

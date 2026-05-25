@@ -13,6 +13,7 @@ use crate::move_ordering::{
 };
 use crate::search_options::{EngineOptions, MAX_THREADS, SearchLimits, SearchOptions};
 use crate::search_threads::{STOP_NONE, STOP_QUIT, STOP_SEARCH, WorkerJob, WorkerPool};
+use crate::syzygy::{self, Wdl};
 use crate::time_manager::{RuntimeLimits, compute_runtime_limits};
 use crate::tt::{Bound, TranspositionTable, score_from_tt};
 
@@ -20,6 +21,7 @@ const MAX_DEPTH: usize = 100;
 const MAX_PLY: usize = 128;
 const MAX_QPLY: usize = 10;
 const MIN_PARALLEL_DEPTH: usize = 4;
+const TB_WIN_SCORE: i32 = MATE_SCORE - MAX_PLY as i32 * 2;
 static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
     let mut table = [[0; 64]; 64];
     for (depth, row) in table.iter_mut().enumerate().skip(1) {
@@ -87,6 +89,10 @@ pub struct Searcher {
     countermove: Box<[[Move; 64]; 64]>,
     root_move_offset: usize,
     tt_write_mode: TtWriteMode,
+    syzygy_probe_depth: i32,
+    syzygy_probe_limit: usize,
+    syzygy_50_move_rule: bool,
+    syzygy_largest: usize,
 }
 
 impl Default for Searcher {
@@ -122,6 +128,10 @@ impl Default for Searcher {
             countermove: Box::new([[Move::NULL; 64]; 64]),
             root_move_offset: 0,
             tt_write_mode: TtWriteMode::Main,
+            syzygy_probe_depth: 1,
+            syzygy_probe_limit: 7,
+            syzygy_50_move_rule: true,
+            syzygy_largest: 0,
         }
     }
 }
@@ -158,10 +168,10 @@ impl Searcher {
     }
 
     pub fn configure(&mut self, options: &SearchOptions) {
-        self.configure_engine(options.engine);
+        self.configure_engine(&options.engine);
     }
 
-    fn configure_engine(&mut self, options: EngineOptions) {
+    fn configure_engine(&mut self, options: &EngineOptions) {
         if options.hash_mb != self.hash_mb {
             if self.tt.resize(options.hash_mb) {
                 self.hash_mb = options.hash_mb;
@@ -174,6 +184,10 @@ impl Searcher {
         }
         if options.clear_hash {
             self.tt.clear();
+        }
+        let largest = syzygy::initialize(&options.syzygy.path);
+        if !options.syzygy.path.is_empty() && largest == 0 {
+            println!("info string SyzygyPath loaded no usable tablebases.");
         }
         self.worker_pool
             .set_helper_count(options.threads.saturating_sub(1));
@@ -207,7 +221,13 @@ impl Searcher {
         emit_info: bool,
         mut poll: impl FnMut() -> SearchEvent,
     ) -> SearchResult {
-        self.search_impl::<true, _>(root, options.limits, options.engine, emit_info, &mut poll)
+        self.search_impl::<true, _>(
+            root,
+            options.limits,
+            options.engine.clone(),
+            emit_info,
+            &mut poll,
+        )
     }
 
     fn search_impl<const ALLOW_PARALLEL: bool, P: FnMut() -> SearchEvent + ?Sized>(
@@ -226,12 +246,16 @@ impl Searcher {
         }
         self.root_move_offset = 0;
         self.tt_write_mode = TtWriteMode::Main;
-        self.reset_search_state(limits, engine_options, root.side_to_move(), true, true);
+        self.reset_search_state(limits, &engine_options, root.side_to_move(), true, true);
 
         let board = root;
         let legal_moves = board.generate_legal_movelist();
         if legal_moves.is_empty() {
             return self.no_legal_moves_result(&board);
+        }
+
+        if let Some(result) = self.syzygy_root_result(&board, legal_moves.as_slice()) {
+            return result;
         }
 
         if ALLOW_PARALLEL {
@@ -247,7 +271,7 @@ impl Searcher {
                     board,
                     legal_moves.as_slice(),
                     limits,
-                    engine_options,
+                    engine_options.clone(),
                     threads,
                     emit_info,
                     poll,
@@ -261,7 +285,7 @@ impl Searcher {
     fn reset_search_state(
         &mut self,
         limits: SearchLimits,
-        engine_options: EngineOptions,
+        engine_options: &EngineOptions,
         side_to_move: Color,
         age_tt: bool,
         age_history: bool,
@@ -274,6 +298,10 @@ impl Searcher {
         self.pondering = limits.ponder;
         self.ponderhit = false;
         self.limits = compute_runtime_limits(limits, engine_options, side_to_move, MAX_DEPTH);
+        self.syzygy_probe_depth = engine_options.syzygy.probe_depth;
+        self.syzygy_probe_limit = engine_options.syzygy.probe_limit;
+        self.syzygy_50_move_rule = engine_options.syzygy.fifty_move_rule;
+        self.syzygy_largest = syzygy::largest().min(self.syzygy_probe_limit);
         if age_tt {
             self.tt.new_search();
         }
@@ -300,6 +328,30 @@ impl Searcher {
             exit: SearchExit::Stop,
             ponderhit: self.ponderhit,
         }
+    }
+
+    fn syzygy_root_result(&self, board: &Board, legal_moves: &[Move]) -> Option<SearchResult> {
+        if !self.can_probe_syzygy_root(board) || board.can_declare_draw() || self.limits.nodes > 0 {
+            return None;
+        }
+
+        let probe = syzygy::probe_root(board, self.syzygy_50_move_rule)?;
+        let root_move = probe.best_move?;
+        let bestmove = syzygy::legal_move_from_root_probe(board, root_move)?;
+        if !legal_moves.contains(&bestmove) {
+            return None;
+        }
+
+        Some(SearchResult {
+            bestmove,
+            pondermove: Move::NULL,
+            score: self.score_from_syzygy_wdl(probe.wdl, 0),
+            depth: 0,
+            nodes: 0,
+            elapsed_ms: self.start.elapsed().as_millis(),
+            exit: SearchExit::Stop,
+            ponderhit: self.ponderhit,
+        })
     }
 
     fn search_root<P: FnMut() -> SearchEvent + ?Sized>(
@@ -415,7 +467,7 @@ impl Searcher {
         legal_moves: &[Move],
         poll: &mut P,
     ) -> SearchResult {
-        self.reset_search_state(limits, engine_options, root.side_to_move(), false, true);
+        self.reset_search_state(limits, &engine_options, root.side_to_move(), false, true);
         self.search_root(root, legal_moves, false, poll)
     }
 
@@ -448,7 +500,7 @@ impl Searcher {
                 root: root.clone(),
                 root_moves: Arc::clone(&root_moves_shared),
                 limits,
-                engine_options: worker_engine_options,
+                engine_options: worker_engine_options.clone(),
                 tt: self.tt.clone(),
                 hash_mb: self.hash_mb,
                 root_move_offset: offset,
@@ -567,6 +619,18 @@ impl Searcher {
 
         let original_alpha = alpha;
         let hash = board.hash;
+        if let Some(score) = self.syzygy_wdl_score(board, depth, ply, excluded) {
+            self.store_tt(
+                hash,
+                depth,
+                score,
+                Bound::Exact,
+                Move::NULL,
+                ply,
+                VALUE_NONE,
+            );
+            return score;
+        }
         let tt_entry = self.tt.probe(hash);
         let tt_move = tt_entry
             .and_then(|entry| entry.best_move())
@@ -591,7 +655,8 @@ impl Searcher {
             }
         }
 
-        if !is_pv && excluded.is_null() && depth >= 4 && tt_move.is_null() {
+        if !is_pv && excluded.is_null() && depth >= 4 && (tt_move.is_null() || tt_depth < depth - 3)
+        {
             depth -= 1;
         }
 
@@ -618,7 +683,7 @@ impl Searcher {
                 && static_eval >= beta
                 && board.has_non_pawn_material(board.side_to_move())
             {
-                let reduction = 3 + depth / 4 + ((static_eval - beta) / 200).clamp(0, 3);
+                let reduction = 4 + depth / 4 + ((static_eval - beta) / 200).clamp(0, 3);
                 board.make_null_move();
                 let score = -self.negamax(
                     board,
@@ -675,6 +740,7 @@ impl Searcher {
                         return 0;
                     }
                     if score >= probcut_beta {
+                        self.store_tt(hash, depth - 3, beta, Bound::Lower, mv, ply, static_eval);
                         return beta;
                     }
                 }
@@ -722,19 +788,21 @@ impl Searcher {
             } else {
                 0
             };
+            let mut gives_check = None;
 
             if !is_pv && !in_check && searched > 0 {
                 if is_quiet {
-                    if depth <= 3 && static_eval + 100 * depth <= alpha {
+                    let prune_candidate = (depth <= 3 && static_eval + 100 * depth <= alpha)
+                        || (depth <= 8 && searched > late_move_prune_count(depth))
+                        || (depth <= 4 && quiet_hist < -8_000)
+                        || (depth <= 6 && quiet_hist < -3_500 * depth);
+                    if prune_candidate && !move_gives_check(board, mv, &mut gives_check) {
                         continue;
                     }
-                    if depth <= 8 && searched > late_move_prune_count(depth) {
-                        continue;
-                    }
-                    if depth <= 4 && quiet_hist < -8_000 {
-                        continue;
-                    }
-                } else if depth <= 7 && see < -80 * depth {
+                } else if depth <= 7
+                    && see < -80 * depth
+                    && !move_gives_check(board, mv, &mut gives_check)
+                {
                     continue;
                 }
             }
@@ -778,6 +846,13 @@ impl Searcher {
                 }
             }
 
+            let checking_move =
+                if depth >= 3 && searched >= 2 && (is_quiet || see < 0) && !mv.is_promo() {
+                    move_gives_check(board, mv, &mut gives_check)
+                } else {
+                    gives_check.unwrap_or(false)
+                };
+
             self.stack_moves[ply] = mv;
             self.stack_pieces[ply] = moving_piece;
             board.make_move_unchecked(mv);
@@ -797,19 +872,21 @@ impl Searcher {
                     poll,
                 );
             } else {
-                let reducible =
-                    depth >= 3 && searched >= 2 && (is_quiet || see < 0) && !mv.is_promo();
+                let reducible = depth >= 3
+                    && searched >= 2
+                    && !in_check
+                    && (is_quiet || see < 0)
+                    && !mv.is_promo()
+                    && !checking_move;
                 if reducible {
                     let hist = quiet_hist;
                     let mut reduction = lmr_reduction(depth, searched);
                     if is_pv {
                         reduction -= 1;
-                    }
-                    if hist > 6_000 {
-                        reduction -= 1;
-                    } else if hist < -6_000 {
+                    } else if is_quiet {
                         reduction += 1;
                     }
+                    reduction -= hist / 8_192;
                     reduction = reduction.clamp(1, new_depth.max(1));
                     score = -self.negamax(
                         board,
@@ -961,9 +1038,6 @@ impl Searcher {
         }
 
         let in_check = board.is_in_check();
-        if in_check && qply >= 1 {
-            return self.corrected_eval(board);
-        }
         let hash = board.hash;
         let original_alpha = alpha;
         let tt_entry = self.tt.probe(hash);
@@ -1008,6 +1082,8 @@ impl Searcher {
             if board.occupied_count() > 8 && stand_pat + piece_value(Piece::Queen) + 200 < alpha {
                 return alpha;
             }
+        } else if qply >= MAX_QPLY {
+            return self.corrected_eval(board);
         }
 
         let moves = if in_check {
@@ -1296,6 +1372,43 @@ impl Searcher {
         self.correction_history[color as usize][pawn_key as usize & (CORR_SIZE - 1)] as i32 / 32
     }
 
+    fn syzygy_wdl_score(
+        &self,
+        board: &Board,
+        depth: i32,
+        ply: usize,
+        excluded: Move,
+    ) -> Option<i32> {
+        if ply == 0 || !excluded.is_null() || !self.can_probe_syzygy(board, depth) {
+            return None;
+        }
+        syzygy::probe_wdl(board, self.syzygy_50_move_rule)
+            .map(|wdl| self.score_from_syzygy_wdl(wdl, ply))
+    }
+
+    fn can_probe_syzygy(&self, board: &Board, depth: i32) -> bool {
+        self.syzygy_largest > 0
+            && depth >= self.syzygy_probe_depth
+            && board.castling.0 == 0
+            && board.occupied_count() as usize <= self.syzygy_largest
+    }
+
+    fn can_probe_syzygy_root(&self, board: &Board) -> bool {
+        self.syzygy_largest > 0
+            && board.castling.0 == 0
+            && board.occupied_count() as usize <= self.syzygy_largest
+    }
+
+    fn score_from_syzygy_wdl(&self, wdl: Wdl, ply: usize) -> i32 {
+        match wdl {
+            Wdl::Win => TB_WIN_SCORE - ply as i32,
+            Wdl::CursedWin if !self.syzygy_50_move_rule => TB_WIN_SCORE - ply as i32,
+            Wdl::Loss => -TB_WIN_SCORE + ply as i32,
+            Wdl::BlessedLoss if !self.syzygy_50_move_rule => -TB_WIN_SCORE + ply as i32,
+            Wdl::BlessedLoss | Wdl::Draw | Wdl::CursedWin => 0,
+        }
+    }
+
     fn update_correction(&mut self, color: Color, pawn_key: u64, diff: i32, depth: i32) {
         let scaled = (diff * depth.max(1)).clamp(-1024, 1024);
         update_hist_entry(
@@ -1412,6 +1525,17 @@ fn late_move_prune_count(depth: i32) -> usize {
     (3 + depth * depth / 2) as usize
 }
 
+fn move_gives_check(board: &Board, mv: Move, cache: &mut Option<bool>) -> bool {
+    match *cache {
+        Some(gives_check) => gives_check,
+        None => {
+            let gives_check = board.gives_check(mv);
+            *cache = Some(gives_check);
+            gives_check
+        }
+    }
+}
+
 fn select_parallel_result(results: &[SearchResult], root_moves: &[Move]) -> Option<SearchResult> {
     let max_depth = results
         .iter()
@@ -1463,5 +1587,24 @@ fn format_score(score: i32) -> String {
         format!("mate -{}", (MATE_SCORE + score + 1) / 2)
     } else {
         format!("cp {score}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quiescence_detects_mate_after_first_qply_check() {
+        let mut searcher = Searcher::default();
+        let mut board =
+            Board::from_fen("rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3")
+                .expect("valid fool's mate FEN");
+
+        let score = searcher.quiescence(&mut board, -INF_SCORE, INF_SCORE, 0, 1, &mut || {
+            SearchEvent::None
+        });
+
+        assert_eq!(score, -MATE_SCORE);
     }
 }

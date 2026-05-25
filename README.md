@@ -22,6 +22,8 @@ speaks the UCI protocol.
 - Move ordering using TT moves, SEE, killers, countermoves, main history,
   capture history, and continuation history
 - Correction history and handcrafted tapered evaluation
+- Optional Syzygy tablebase probing through the UCI `SyzygyPath`,
+  `SyzygyProbeDepth`, `SyzygyProbeLimit`, and `Syzygy50MoveRule` options
 - Built-in `bench` UCI command for repeatable search benchmarks
 
 ## UCI Support
@@ -46,6 +48,16 @@ Supported options:
 - `Clear Hash`
 - `Move Overhead` default `10`
 - `Threads` default `1`, min `1`, max `1024`
+- `SyzygyPath` default empty
+- `SyzygyProbeDepth` default `1`, min `1`, max `100`
+- `SyzygyProbeLimit` default `7`, min `0`, max `7`
+- `Syzygy50MoveRule` default `true`
+
+`SyzygyPath` may contain one or more Syzygy directories separated by the
+platform path separator (`;` on Windows, `:` on Unix-like systems). When the
+path is empty, tablebase probing is disabled. Lynx uses WDL probes inside the
+search and a DTZ root probe when a root position is covered. Set
+`SyzygyProbeLimit` to `0` to disable probing without changing the path.
 
 ## Bench
 
@@ -119,6 +131,8 @@ The suite covers:
 - Search limits and stop/quit behavior
 - Single-thread determinism and thread-count reconfiguration
 - Threaded search node-limit handling
+- Syzygy option parsing, result decoding, root move conversion, and
+  disabled-path probe behavior
 - UCI command ordering, priority quit/stop handling, and stale-search
   cancellation
 - UCI ponder and infinite-search `bestmove` release timing
@@ -138,7 +152,7 @@ Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
 ## Releases
 
-Current documented release: `1.0.2`.
+Current documented release: `1.1.0`.
 
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)
