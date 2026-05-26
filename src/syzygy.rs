@@ -1,5 +1,6 @@
 use std::ffi::CString;
-use std::os::raw::{c_char, c_uint};
+use std::fs;
+use std::os::raw::{c_char, c_int, c_uint};
 use std::sync::{
     LazyLock, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -21,6 +22,8 @@ const TB_RESULT_WDL_SHIFT: u32 = 0;
 const TB_RESULT_TO_SHIFT: u32 = 4;
 const TB_RESULT_FROM_SHIFT: u32 = 10;
 const TB_RESULT_PROMOTES_SHIFT: u32 = 16;
+const TB_MAX_MOVES: usize = 193;
+const TB_MAX_PLY: usize = 256;
 
 static SYZYGY_PATH: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
 static LARGEST: AtomicUsize = AtomicUsize::new(0);
@@ -55,6 +58,76 @@ unsafe extern "C" {
         turn: bool,
         results: *mut c_uint,
     ) -> c_uint;
+    fn tb_probe_root_dtz(
+        white: u64,
+        black: u64,
+        kings: u64,
+        queens: u64,
+        rooks: u64,
+        bishops: u64,
+        knights: u64,
+        pawns: u64,
+        rule50: c_uint,
+        castling: c_uint,
+        ep: c_uint,
+        turn: bool,
+        has_repeated: bool,
+        use_rule50: bool,
+        results: *mut TbRootMovesRaw,
+    ) -> c_int;
+    fn tb_probe_root_wdl(
+        white: u64,
+        black: u64,
+        kings: u64,
+        queens: u64,
+        rooks: u64,
+        bishops: u64,
+        knights: u64,
+        pawns: u64,
+        rule50: c_uint,
+        castling: c_uint,
+        ep: c_uint,
+        turn: bool,
+        use_rule50: bool,
+        results: *mut TbRootMovesRaw,
+    ) -> c_int;
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct TbRootMoveRaw {
+    mv: u16,
+    pv: [u16; TB_MAX_PLY],
+    pv_size: c_uint,
+    tb_score: i32,
+    tb_rank: i32,
+}
+
+impl Default for TbRootMoveRaw {
+    fn default() -> Self {
+        Self {
+            mv: 0,
+            pv: [0; TB_MAX_PLY],
+            pv_size: 0,
+            tb_score: 0,
+            tb_rank: 0,
+        }
+    }
+}
+
+#[repr(C)]
+struct TbRootMovesRaw {
+    size: c_uint,
+    moves: [TbRootMoveRaw; TB_MAX_MOVES],
+}
+
+impl Default for TbRootMovesRaw {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            moves: [TbRootMoveRaw::default(); TB_MAX_MOVES],
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -77,6 +150,19 @@ pub struct RootMove {
 pub struct RootProbe {
     pub wdl: Wdl,
     pub best_move: Option<RootMove>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RootMoveProbe {
+    pub root_move: RootMove,
+    pub rank: i32,
+    pub score: i32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RootMoveProbes {
+    pub used_dtz: bool,
+    pub moves: Vec<RootMoveProbe>,
 }
 
 #[derive(Copy, Clone)]
@@ -127,9 +213,42 @@ pub fn initialize(path: &str) -> usize {
     largest
 }
 
+pub fn current_path() -> String {
+    SYZYGY_PATH
+        .lock()
+        .expect("syzygy path mutex poisoned")
+        .clone()
+}
+
 #[inline(always)]
 pub fn largest() -> usize {
     LARGEST.load(Ordering::Relaxed)
+}
+
+pub fn tablebase_file_counts(path: &str) -> (usize, usize) {
+    let mut wdl = 0usize;
+    let mut dtz = 0usize;
+    for part in path
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        let Ok(entries) = fs::read_dir(part) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(extension) = path.extension().and_then(|ext| ext.to_str()) else {
+                continue;
+            };
+            match extension.to_ascii_lowercase().as_str() {
+                "rtbw" => wdl += 1,
+                "rtbz" => dtz += 1,
+                _ => {}
+            }
+        }
+    }
+    (wdl, dtz)
 }
 
 pub fn probe_wdl(board: &Board, use_rule50: bool) -> Option<Wdl> {
@@ -186,6 +305,79 @@ pub fn probe_root(board: &Board, use_rule50: bool) -> Option<RootProbe> {
         wdl,
         best_move: root_move_from_result(result),
     })
+}
+
+pub fn probe_root_moves(
+    board: &Board,
+    use_rule50: bool,
+    has_repeated: bool,
+) -> Option<RootMoveProbes> {
+    if !can_probe(board, use_rule50, true) {
+        return None;
+    }
+
+    let pos = tb_position(board);
+    let mut results = TbRootMovesRaw::default();
+    let dtz_ok = unsafe {
+        tb_probe_root_dtz(
+            pos.white,
+            pos.black,
+            pos.kings,
+            pos.queens,
+            pos.rooks,
+            pos.bishops,
+            pos.knights,
+            pos.pawns,
+            pos.rule50,
+            0,
+            pos.ep,
+            pos.turn,
+            has_repeated,
+            use_rule50,
+            &mut results,
+        )
+    };
+    let used_dtz = dtz_ok != 0;
+    if !used_dtz {
+        results = TbRootMovesRaw::default();
+        let wdl_ok = unsafe {
+            tb_probe_root_wdl(
+                pos.white,
+                pos.black,
+                pos.kings,
+                pos.queens,
+                pos.rooks,
+                pos.bishops,
+                pos.knights,
+                pos.pawns,
+                pos.rule50,
+                0,
+                pos.ep,
+                pos.turn,
+                use_rule50,
+                &mut results,
+            )
+        };
+        if wdl_ok == 0 {
+            return None;
+        }
+    }
+
+    let len = (results.size as usize).min(TB_MAX_MOVES);
+    let mut moves = Vec::new();
+    for result in results.moves.iter().take(len) {
+        moves.push(RootMoveProbe {
+            root_move: root_move_from_tb_move(result.mv)?,
+            rank: result.tb_rank,
+            score: result.tb_score,
+        });
+    }
+
+    if moves.is_empty() {
+        None
+    } else {
+        Some(RootMoveProbes { used_dtz, moves })
+    }
 }
 
 pub fn legal_move_from_root_probe(board: &Board, root_move: RootMove) -> Option<Move> {
@@ -249,6 +441,24 @@ fn root_move_from_result(result: u32) -> Option<RootMove> {
     }
 }
 
+fn root_move_from_tb_move(mv: u16) -> Option<RootMove> {
+    let from = ((mv >> 6) & 0x3F) as u8;
+    let to = (mv & 0x3F) as u8;
+    let promotes = match (mv >> 12) & 0x7 {
+        0 => None,
+        1 => Some(Piece::Queen),
+        2 => Some(Piece::Rook),
+        3 => Some(Piece::Bishop),
+        4 => Some(Piece::Knight),
+        _ => return None,
+    };
+    if from == to {
+        None
+    } else {
+        Some(RootMove { from, to, promotes })
+    }
+}
+
 fn wdl_from_raw(value: u32) -> Option<Wdl> {
     match value {
         TB_LOSS => Some(Wdl::Loss),
@@ -265,12 +475,21 @@ mod tests {
     use super::*;
 
     use crate::board::Square;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::{LazyLock, Mutex};
+
+    static TEST_SYZYGY_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     fn encoded_root_result(from: Square, to: Square, promotes: u32) -> u32 {
         (TB_WIN << TB_RESULT_WDL_SHIFT)
             | ((to.0 as u32) << TB_RESULT_TO_SHIFT)
             | ((from.0 as u32) << TB_RESULT_FROM_SHIFT)
             | (promotes << TB_RESULT_PROMOTES_SHIFT)
+    }
+
+    fn encoded_tb_move(from: Square, to: Square, promotes: u16) -> u16 {
+        ((from.0 as u16) << 6) | to.0 as u16 | (promotes << 12)
     }
 
     #[test]
@@ -325,6 +544,75 @@ mod tests {
     }
 
     #[test]
+    fn root_move_from_tb_move_decodes_fathom_move_fields() {
+        assert_eq!(
+            root_move_from_tb_move(encoded_tb_move(Square::C6, Square::C7, 0)),
+            Some(RootMove {
+                from: Square::C6.0,
+                to: Square::C7.0,
+                promotes: None,
+            })
+        );
+        assert_eq!(
+            root_move_from_tb_move(encoded_tb_move(Square::A7, Square::A8, 1)),
+            Some(RootMove {
+                from: Square::A7.0,
+                to: Square::A8.0,
+                promotes: Some(Piece::Queen),
+            })
+        );
+        assert_eq!(
+            root_move_from_tb_move(encoded_tb_move(Square::A7, Square::A8, 7)),
+            None
+        );
+    }
+
+    #[test]
+    fn tablebase_file_counts_scan_semicolon_separated_paths() {
+        let base =
+            std::env::temp_dir().join(format!("lynx-syzygy-counts-{}-{}", std::process::id(), 1));
+        let first = base.join("a");
+        let second = base.join("b");
+        fs::create_dir_all(&first).expect("create first temp tablebase directory");
+        fs::create_dir_all(&second).expect("create second temp tablebase directory");
+        fs::write(first.join("KQvK.rtbw"), []).expect("write WDL file");
+        fs::write(first.join("KQvK.rtbz"), []).expect("write DTZ file");
+        fs::write(second.join("KRvK.RTBW"), []).expect("write upper-case WDL file");
+        fs::write(second.join("README.txt"), []).expect("write ignored file");
+
+        let path = format!("{};{}", first.display(), second.display());
+        assert_eq!(tablebase_file_counts(&path), (2, 1));
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn probe_root_moves_uses_local_syzygy_tables_when_available() {
+        let _guard = TEST_SYZYGY_LOCK.lock().expect("syzygy test lock poisoned");
+        let path = "D:\\chess\\Syzygy345";
+        if !Path::new(path).join("KQvK.rtbw").exists()
+            || !Path::new(path).join("KQvK.rtbz").exists()
+        {
+            return;
+        }
+
+        assert!(initialize(path) >= 3);
+        let board = Board::from_fen("k7/8/2KQ4/8/8/8/8/8 w - - 0 1").expect("valid FEN");
+        let root = probe_root_moves(&board, true, false).expect("root TB probe succeeds");
+
+        assert!(root.used_dtz);
+        assert!(
+            root.moves.iter().any(|probe| {
+                legal_move_from_root_probe(&board, probe.root_move)
+                    .is_some_and(|mv| mv.to_string() == "c6c7")
+            }),
+            "expected KQvK root probe to include c6c7"
+        );
+
+        initialize("");
+    }
+
+    #[test]
     fn tb_position_exports_bitboards_side_ep_and_rule50_state() {
         let board = Board::from_fen("4k3/8/8/8/4Pp2/8/8/4K3 b - e3 7 42").expect("valid FEN");
 
@@ -375,6 +663,7 @@ mod tests {
 
     #[test]
     fn initialize_rejects_path_with_nul_without_calling_fathom() {
+        let _guard = TEST_SYZYGY_LOCK.lock().expect("syzygy test lock poisoned");
         assert_eq!(initialize("bad\0path"), 0);
         assert_eq!(largest(), 0);
     }

@@ -167,6 +167,34 @@ fn check_detection_matches_hand_checked_positions() {
 }
 
 #[test]
+fn attackers_to_color_matches_masked_all_attackers() {
+    let squares = [
+        Square::A1,
+        Square::C3,
+        Square::D4,
+        Square::E4,
+        Square::F6,
+        Square::H8,
+    ];
+
+    for fen in ORACLE_FENS {
+        let board = Board::from_fen(fen).unwrap_or_else(|err| panic!("{fen}: {err}"));
+        let occ = board.occupied();
+        for sq in squares {
+            let all_attackers = board.attackers_to(sq, occ);
+            for color in [Color::White, Color::Black] {
+                let expected = all_attackers & board.color_occ(color) & occ;
+                assert_eq!(
+                    board.attackers_to_color(sq, occ, color),
+                    expected,
+                    "{fen}: {color:?} attackers to {sq}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn fen_round_trip_preserves_state() {
     for fen in ORACLE_FENS {
         let board = Board::from_fen(fen).unwrap_or_else(|err| panic!("{fen}: {err}"));
@@ -628,6 +656,10 @@ fn insufficient_material_not_draw_cases() {
 fn threefold_repetition_triggers_can_declare_draw() {
     let mut board = Board::starting_position();
     assert!(!board.can_declare_draw(), "initial position is not a draw");
+    assert!(
+        !board.has_repeated_position(),
+        "initial position has no repeated search state"
+    );
 
     // Shuffle knights back and forth: after 8 half-moves the starting hash
     // has appeared in history twice, giving a total count of 3 (threefold).
@@ -636,6 +668,10 @@ fn threefold_repetition_triggers_can_declare_draw() {
         assert!(board.play_uci(mv), "move {mv} must be legal");
     }
 
+    assert!(
+        board.has_repeated_position(),
+        "search repetition should be visible before tablebase root probing"
+    );
     assert!(
         board.can_declare_draw(),
         "position must be threefold repetition after two full knight cycles"

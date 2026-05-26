@@ -27,6 +27,7 @@ pub struct EngineOptions {
     pub hash_mb: usize,
     pub clear_hash: bool,
     pub threads: usize,
+    pub multi_pv: usize,
     pub syzygy: SyzygyOptions,
 }
 
@@ -37,6 +38,7 @@ impl Default for EngineOptions {
             hash_mb: 64,
             clear_hash: false,
             threads: 1,
+            multi_pv: 1,
             syzygy: SyzygyOptions::default(),
         }
     }
@@ -115,7 +117,8 @@ impl SearchOptions {
             String::from("option name Clear Hash type button"),
             String::from("option name Move Overhead type spin default 10 min 0 max 5000"),
             format!("option name Threads type spin default 1 min 1 max {MAX_THREADS}"),
-            String::from("option name SyzygyPath type string default"),
+            String::from("option name MultiPV type spin default 1 min 1 max 256"),
+            String::from("option name SyzygyPath type string default <empty>"),
             String::from("option name SyzygyProbeDepth type spin default 1 min 1 max 100"),
             String::from("option name SyzygyProbeLimit type spin default 7 min 0 max 7"),
             String::from("option name Syzygy50MoveRule type check default true"),
@@ -278,6 +281,13 @@ impl SearchOptions {
                     self.engine.threads = threads.clamp(1, MAX_THREADS);
                 } else {
                     println!("info string Invalid Threads value.");
+                }
+            }
+            "multipv" => {
+                if let Ok(multi_pv) = value.parse::<usize>() {
+                    self.engine.multi_pv = multi_pv.clamp(1, 256);
+                } else {
+                    println!("info string Invalid MultiPV value.");
                 }
             }
             "syzygypath" => {

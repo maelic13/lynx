@@ -15,6 +15,7 @@ speaks the UCI protocol.
 - Configurable Lazy SMP-style parallel search with persistent workers and a
   full-key validated shared transposition table through the UCI `Threads`
   option
+- Basic UCI `MultiPV` support for analysis output
 - Capture-focused quiescence search with delta pruning, SEE-based pruning, and
   bounded check evasions
 - Null-move pruning, ProbCut, singular extensions, futility pruning, late move
@@ -23,7 +24,8 @@ speaks the UCI protocol.
   capture history, and continuation history
 - Correction history and handcrafted tapered evaluation
 - Optional Syzygy tablebase probing through the UCI `SyzygyPath`,
-  `SyzygyProbeDepth`, `SyzygyProbeLimit`, and `Syzygy50MoveRule` options
+  `SyzygyProbeDepth`, `SyzygyProbeLimit`, and `Syzygy50MoveRule` options,
+  with root DTZ ranking, WDL fallback, load summaries, and `tbhits` reporting
 - Built-in `bench` UCI command for repeatable search benchmarks
 
 ## UCI Support
@@ -48,6 +50,7 @@ Supported options:
 - `Clear Hash`
 - `Move Overhead` default `10`
 - `Threads` default `1`, min `1`, max `1024`
+- `MultiPV` default `1`, min `1`, max `256`
 - `SyzygyPath` default empty
 - `SyzygyProbeDepth` default `1`, min `1`, max `100`
 - `SyzygyProbeLimit` default `7`, min `0`, max `7`
@@ -56,8 +59,10 @@ Supported options:
 `SyzygyPath` may contain one or more Syzygy directories separated by the
 platform path separator (`;` on Windows, `:` on Unix-like systems). When the
 path is empty, tablebase probing is disabled. Lynx uses WDL probes inside the
-search and a DTZ root probe when a root position is covered. Set
-`SyzygyProbeLimit` to `0` to disable probing without changing the path.
+search and DTZ-ranked root probing when DTZ tables are available. If root DTZ
+probing is unavailable but WDL tables are present, Lynx falls back to WDL root
+move filtering. Search info includes `tbhits` when tablebase probes are used.
+Set `SyzygyProbeLimit` to `0` to disable probing without changing the path.
 
 ## Bench
 
@@ -128,17 +133,19 @@ The suite covers:
 - Perft reference positions
 - Hashing and make/unmake correctness
 - Draw and terminal-result handling
-- Search limits and stop/quit behavior
+- Search limits, invalid limit parsing, and stop/quit behavior
+- Time-management behavior for fast clocks, `movetime`, side-to-move clocks,
+  explicit `movestogo`, and unbounded fixed-depth searches
 - Single-thread determinism and thread-count reconfiguration
 - Threaded search node-limit handling
-- Syzygy option parsing, result decoding, root move conversion, and
-  disabled-path probe behavior
+- Syzygy option parsing, result decoding, root move conversion, root tablebase
+  probing, tablebase path counting, and disabled-path probe behavior
 - UCI command ordering, priority quit/stop handling, and stale-search
   cancellation
 - UCI ponder and infinite-search `bestmove` release timing
 - Quiet/capture move-generation partitioning
 - Evaluation and transposition table behavior
-- UCI command handling
+- UCI command handling and invalid `setoption` preservation
 
 ## Use With A GUI
 
@@ -152,7 +159,7 @@ Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
 ## Releases
 
-Current documented release: `1.1.0`.
+Current documented release: `1.2.1`.
 
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)

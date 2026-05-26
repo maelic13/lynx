@@ -461,6 +461,10 @@ impl Board {
         self.halfmove_clock >= 4 && self.is_repetition(2)
     }
 
+    pub fn has_repeated_position(&self) -> bool {
+        self.halfmove_clock >= 4 && self.is_repetition(2)
+    }
+
     pub fn has_non_pawn_material(&self, color: Color) -> bool {
         (self.pieces(color, Piece::Knight)
             | self.pieces(color, Piece::Bishop)
@@ -477,7 +481,16 @@ impl Board {
 
     #[inline(always)]
     pub fn attackers_to_color(&self, sq: Square, occ: Bitboard, color: Color) -> Bitboard {
-        self.attackers_to(sq, occ) & self.color_occ(color) & occ
+        let atk = &*ATTACKS;
+        let diagonal = self.pieces(color, Piece::Bishop) | self.pieces(color, Piece::Queen);
+        let orthogonal = self.pieces(color, Piece::Rook) | self.pieces(color, Piece::Queen);
+
+        (atk.pawn(!color, sq) & self.pieces(color, Piece::Pawn)
+            | atk.knight(sq) & self.pieces(color, Piece::Knight)
+            | atk.king(sq) & self.pieces(color, Piece::King)
+            | atk.bishop(sq, occ) & diagonal
+            | atk.rook(sq, occ) & orthogonal)
+            & occ
     }
 
     #[inline(always)]

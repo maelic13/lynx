@@ -82,6 +82,26 @@ fn searcher_handles_thread_count_changes() {
     assert_eq!(single.bestmove.to_string(), "d8h4");
 }
 
+#[test]
+fn multipv_search_returns_stable_root_result() {
+    let board = Board::default();
+    let mut searcher = Searcher::default();
+    let mut options = SearchOptions::default();
+    options.limits.depth = 2.0;
+    options.engine.multi_pv = 3;
+
+    let result = searcher.search(board.clone(), &options, false, || SearchEvent::None);
+
+    assert_eq!(result.depth, 2);
+    assert!(
+        board
+            .generate_legal_movelist()
+            .iter()
+            .any(|&mv| mv == result.bestmove)
+    );
+    assert_eq!(result.tb_hits, 0);
+}
+
 fn search_at_depth(board: Board, depth: usize) -> Move {
     search_at_depth_with_threads(board, depth, 1)
 }

@@ -74,12 +74,47 @@ fn search_options_parse_startpos_moves_and_go_limits() {
 }
 
 #[test]
+fn search_options_default_go_and_invalid_limits_are_bounded() {
+    let mut options = SearchOptions::default();
+
+    options.set_search_parameters(&[]);
+
+    assert_eq!(options.limits.depth, 2.0);
+    assert_eq!(options.limits.nodes, 0);
+    assert!(!options.limits.infinite);
+    assert!(!options.limits.ponder);
+
+    options.set_search_parameters(&args(&[
+        "depth",
+        "not-a-number",
+        "nodes",
+        "bad",
+        "movetime",
+        "none",
+        "wtime",
+        "missing",
+        "btime",
+        "also-bad",
+        "movestogo",
+        "oops",
+    ]));
+
+    assert_eq!(options.limits.depth, 2.0);
+    assert_eq!(options.limits.nodes, 0);
+    assert_eq!(options.limits.move_time, 0);
+    assert_eq!(options.limits.white_time, 0);
+    assert_eq!(options.limits.black_time, 0);
+    assert_eq!(options.limits.movestogo, 0);
+}
+
+#[test]
 fn search_options_setoption_and_reset_cover_engine_configuration() {
     let mut options = SearchOptions::default();
 
     options.set_option(&args(&["name", "Hash", "value", "256"]));
     options.set_option(&args(&["name", "Move", "Overhead", "value", "25"]));
     options.set_option(&args(&["name", "Threads", "value", "99"]));
+    options.set_option(&args(&["name", "MultiPV", "value", "3"]));
     options.set_option(&args(&["name", "SyzygyPath", "value", "C:\\TB\\WDL"]));
     options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "6"]));
     options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "5"]));
@@ -89,6 +124,7 @@ fn search_options_setoption_and_reset_cover_engine_configuration() {
     assert_eq!(options.engine.hash_mb, 256);
     assert_eq!(options.engine.move_overhead, 25.0);
     assert_eq!(options.engine.threads, 99);
+    assert_eq!(options.engine.multi_pv, 3);
     assert_eq!(options.engine.syzygy.path, "C:\\TB\\WDL");
     assert_eq!(options.engine.syzygy.probe_depth, 6);
     assert_eq!(options.engine.syzygy.probe_limit, 5);
@@ -111,21 +147,55 @@ fn search_options_setoption_and_reset_cover_engine_configuration() {
     assert_eq!(options.engine.hash_mb, 256);
     assert_eq!(options.engine.move_overhead, 25.0);
     assert_eq!(options.engine.syzygy.path, "C:\\TB\\WDL");
+    assert_eq!(options.engine.multi_pv, 3);
 
     let names = SearchOptions::get_uci_options().join("\n");
     assert!(names.contains("option name Hash"));
     assert!(names.contains("option name Move Overhead"));
     assert!(names.contains("option name Threads type spin default 1 min 1 max 1024"));
+    assert!(names.contains("option name MultiPV type spin default 1 min 1 max 256"));
     assert!(names.contains("option name Clear Hash"));
-    assert!(names.contains("option name SyzygyPath"));
-    assert!(names.contains("option name SyzygyProbeDepth"));
+    assert!(names.contains("option name SyzygyPath type string default <empty>"));
+    assert!(names.contains("option name SyzygyProbeDepth type spin default 1 min 1 max 100"));
     assert!(names.contains("option name SyzygyProbeLimit"));
     assert!(names.contains("option name Syzygy50MoveRule"));
 }
 
 #[test]
+fn search_options_invalid_setoption_values_preserve_previous_values() {
+    let mut options = SearchOptions::default();
+
+    options.set_option(&args(&["name", "Hash", "value", "128"]));
+    options.set_option(&args(&["name", "Move", "Overhead", "value", "35"]));
+    options.set_option(&args(&["name", "Threads", "value", "4"]));
+    options.set_option(&args(&["name", "MultiPV", "value", "2"]));
+    options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "8"]));
+    options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "5"]));
+    options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "false"]));
+
+    options.set_option(&args(&["name", "Hash", "value", "bad"]));
+    options.set_option(&args(&["name", "Move", "Overhead", "value", "nan"]));
+    options.set_option(&args(&["name", "Move", "Overhead", "value", "5001"]));
+    options.set_option(&args(&["name", "Threads", "value", "bad"]));
+    options.set_option(&args(&["name", "MultiPV", "value", "bad"]));
+    options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "bad"]));
+    options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "bad"]));
+    options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "maybe"]));
+    options.set_option(&args(&["name", "Unknown", "Option", "value", "1"]));
+
+    assert_eq!(options.engine.hash_mb, 128);
+    assert_eq!(options.engine.move_overhead, 35.0);
+    assert_eq!(options.engine.threads, 4);
+    assert_eq!(options.engine.multi_pv, 2);
+    assert_eq!(options.engine.syzygy.probe_depth, 8);
+    assert_eq!(options.engine.syzygy.probe_limit, 5);
+    assert!(!options.engine.syzygy.fifty_move_rule);
+}
+
+#[test]
 fn search_options_clamp_syzygy_values_and_preserve_raw_path() {
     let mut options = SearchOptions::default();
+    assert_eq!(options.engine.syzygy.probe_depth, 1);
 
     options.set_option(&args(&[
         "name",
@@ -146,9 +216,11 @@ fn search_options_clamp_syzygy_values_and_preserve_raw_path() {
     options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "250"]));
     options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "0"]));
     options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "maybe"]));
+    options.set_option(&args(&["name", "MultiPV", "value", "999"]));
 
     assert_eq!(options.engine.syzygy.probe_depth, 100);
     assert_eq!(options.engine.syzygy.probe_limit, 0);
+    assert_eq!(options.engine.multi_pv, 256);
     assert!(
         !options.engine.syzygy.fifty_move_rule,
         "invalid boolean value must leave the previous setting unchanged"
@@ -339,6 +411,7 @@ fn search_returns_null_move_for_stalemate() {
     assert_eq!(result.pondermove, Move::NULL);
     assert_eq!(result.depth, 0);
     assert_eq!(result.score, 0);
+    assert_eq!(result.tb_hits, 0);
     assert_eq!(result.exit, SearchExit::Stop);
 }
 

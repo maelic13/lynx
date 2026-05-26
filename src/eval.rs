@@ -472,9 +472,19 @@ impl Evaluator {
         pawn_attacks: &[Bitboard; 2],
         phase: i32,
     ) {
+        let occupied = board.occupied();
+        let color_occ = [board.color_occ(Color::White), board.color_occ(Color::Black)];
+        let pawns = [
+            board.pieces(Color::White, Piece::Pawn),
+            board.pieces(Color::Black, Piece::Pawn),
+        ];
+
         for color in [Color::White, Color::Black] {
             let sign = color_sign(color);
             let them = !color;
+            let own_pawns = pawns[color as usize];
+            let their_pawns = pawns[them as usize];
+            let own_occ = color_occ[color as usize];
 
             if board.pieces(color, Piece::Bishop).more_than_one() {
                 *mg += sign * 30;
@@ -485,9 +495,8 @@ impl Evaluator {
             while rooks.any() {
                 let sq = rooks.pop_lsb();
                 let file = SQUARE_FILE[sq.index()];
-                let own_file_empty = (board.pieces(color, Piece::Pawn) & FILE_BBS[file]).is_empty();
-                let their_file_empty =
-                    (board.pieces(them, Piece::Pawn) & FILE_BBS[file]).is_empty();
+                let own_file_empty = (own_pawns & FILE_BBS[file]).is_empty();
+                let their_file_empty = (their_pawns & FILE_BBS[file]).is_empty();
                 if own_file_empty && their_file_empty {
                     *mg += sign * 25;
                     *eg += sign * 10;
@@ -505,8 +514,8 @@ impl Evaluator {
             while knights.any() {
                 let sq = knights.pop_lsb();
                 if relative_rank(color, sq) >= 4
-                    && (atk.pawn(them, sq) & board.pieces(color, Piece::Pawn)).any()
-                    && (atk.pawn(color, sq) & board.pieces(them, Piece::Pawn)).is_empty()
+                    && (atk.pawn(them, sq) & own_pawns).any()
+                    && (atk.pawn(color, sq) & their_pawns).is_empty()
                 {
                     *mg += sign * 25;
                     *eg += sign * 15;
@@ -518,8 +527,8 @@ impl Evaluator {
                 let mut pieces = board.pieces(color, piece);
                 while pieces.any() {
                     let sq = pieces.pop_lsb();
-                    let attacks = attacks_for(atk, piece, sq, board.occupied());
-                    let mobility = (attacks & safe & !board.color_occ(color)).count() as i32;
+                    let attacks = attacks_for(atk, piece, sq, occupied);
+                    let mobility = (attacks & safe & !own_occ).count() as i32;
                     *mg += sign * mobility * mobility_mg(piece);
                     *eg += sign * mobility * mobility_eg(piece);
                 }
@@ -545,9 +554,9 @@ impl Evaluator {
                 }
             }
 
-            self.eval_king_safety(board, atk, color, sign, mg);
+            self.eval_king_safety(board, atk, color, sign, mg, occupied, &pawns);
             self.eval_rooks_behind_passers(board, color, sign, passed, mg, eg);
-            self.eval_hanging_pieces(board, color, sign, mg, eg);
+            self.eval_hanging_pieces(board, color, sign, mg, eg, occupied);
         }
 
         self.eval_passed_pawn_king_proximity(board, passed, eg);
@@ -598,6 +607,8 @@ impl Evaluator {
         color: Color,
         sign: i32,
         mg: &mut i32,
+        occupied: Bitboard,
+        pawns: &[Bitboard; 2],
     ) {
         let them = !color;
         let king = board.king_sq(color);
@@ -615,7 +626,7 @@ impl Evaluator {
             let mut pieces = board.pieces(them, piece);
             while pieces.any() {
                 let sq = pieces.pop_lsb();
-                if (attacks_for(atk, piece, sq, board.occupied()) & zone).any() {
+                if (attacks_for(atk, piece, sq, occupied) & zone).any() {
                     units += match piece {
                         Piece::Knight | Piece::Bishop => 2,
                         Piece::Rook => 3,
@@ -638,8 +649,8 @@ impl Evaluator {
                 if !(0..8).contains(&file) {
                     continue;
                 }
-                let pawns = board.pieces(color, Piece::Pawn) & FILE_BBS[file as usize];
-                let in_front = pawns & FORWARD_RANKS[color as usize][king_rank as usize];
+                let file_pawns = pawns[color as usize] & FILE_BBS[file as usize];
+                let in_front = file_pawns & FORWARD_RANKS[color as usize][king_rank as usize];
                 if in_front.is_empty() {
                     *mg -= sign * if df == 0 { 20 } else { 10 };
                 } else {
@@ -662,7 +673,7 @@ impl Evaluator {
             }
         }
 
-        let enemy_pawns = board.pieces(them, Piece::Pawn);
+        let enemy_pawns = pawns[them as usize];
         let mut storm_files = Bitboard::EMPTY;
         let king_file = SQUARE_FILE[king.index()] as i32;
         for df in -1..=1 {
@@ -747,6 +758,7 @@ impl Evaluator {
         sign: i32,
         mg: &mut i32,
         eg: &mut i32,
+        occupied: Bitboard,
     ) {
         let them = !color;
         let mut pieces = board.color_occ(color)
@@ -754,19 +766,15 @@ impl Evaluator {
             & !board.pieces(color, Piece::King);
         while pieces.any() {
             let sq = pieces.pop_lsb();
-            if board
-                .attackers_to_color(sq, board.occupied(), them)
-                .is_empty()
-                || board.attackers_to_color(sq, board.occupied(), color).any()
-            {
+            let Some(piece) = board.piece_on(sq) else {
+                continue;
+            };
+            let attackers = board.attackers_to_color(sq, occupied, them);
+            let defenders = board.attackers_to_color(sq, occupied, color);
+            if attackers.is_empty() || defenders.any() {
                 continue;
             }
-            let penalty = match board.piece_on(sq) {
-                Some(Piece::Knight | Piece::Bishop) => 45,
-                Some(Piece::Rook) => 60,
-                Some(Piece::Queen) => 80,
-                _ => 0,
-            };
+            let penalty = hanging_piece_penalty(piece);
             *mg -= sign * penalty;
             *eg -= sign * penalty;
         }
@@ -807,6 +815,16 @@ impl Evaluator {
 #[inline(always)]
 pub fn piece_value(piece: Piece) -> i32 {
     unsafe { *PIECE_VALUES.get_unchecked(piece as usize) }
+}
+
+#[inline(always)]
+fn hanging_piece_penalty(piece: Piece) -> i32 {
+    match piece {
+        Piece::Knight | Piece::Bishop => 45,
+        Piece::Rook => 60,
+        Piece::Queen => 80,
+        _ => 0,
+    }
 }
 
 #[inline(always)]

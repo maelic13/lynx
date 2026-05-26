@@ -2,6 +2,54 @@
 
 All notable changes to Lynx are documented in this file.
 
+## [1.2.1] - 2026-05-25
+
+### Changed
+
+- Made timed-search allocation more conservative at fast controls by assuming
+  a slightly longer remaining game and lowering the hard-stop cap. This reduces
+  avoidable time forfeits while leaving fixed-depth and fixed-movetime search
+  behavior unchanged.
+
+### Added
+
+- Added time-manager regression coverage for fast sudden-death clocks,
+  fixed `movetime`, side-to-move clock selection, explicit `movestogo`,
+  minimum allocation, and unbounded fixed-depth searches.
+- Added UCI option/parser regression coverage for default `go`, invalid search
+  limit values, invalid `setoption` values, and preservation of previous
+  engine option values after rejected input.
+
+## [1.2.0] - 2026-05-25
+
+### Added
+
+- Added UCI `MultiPV` option and basic sequential MultiPV root analysis output.
+- Added `tbhits` reporting in UCI search info.
+- Added Syzygy tablebase load summaries that report WDL and DTZ file counts and
+  the largest loaded tablebase cardinality.
+- Added root Syzygy move ranking through Fathom's DTZ root API, with WDL root
+  fallback when DTZ tables are unavailable.
+- Added regression coverage for tablebase file counting, Fathom root move
+  decoding, local Syzygy root probing when tables are present, root repetition
+  exposure, `tb_hits`, and the MultiPV search path.
+
+### Changed
+
+- Changed root tablebase behavior to filter and search tablebase-correct root
+  moves instead of immediately returning a single zero-node root move.
+- Improved Stockfish compatibility for Syzygy UCI defaults and practical root
+  tablebase usage.
+- Passed repetition state into root DTZ probing so root tablebase ranking can
+  account for repeated positions.
+- Specialized color-specific attack lookup and reduced repeated bitboard
+  queries in evaluation hot paths for a modest NPS improvement.
+
+### Fixed
+
+- Fixed root move restriction handling so tablebase-filtered and
+  helper-thread root move lists are actually respected by the root search.
+
 ## [1.1.0] - 2026-05-25
 
 ### Added

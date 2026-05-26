@@ -52,6 +52,7 @@ pub struct SearchResult {
     pub score: i32,
     pub depth: usize,
     pub nodes: u64,
+    pub tb_hits: u64,
     pub elapsed_ms: u128,
     pub exit: SearchExit,
     pub ponderhit: bool,
@@ -63,12 +64,18 @@ enum TtWriteMode {
     Helper,
 }
 
+struct RootLine {
+    score: i32,
+    pv: Vec<Move>,
+}
+
 pub struct Searcher {
     tt: TranspositionTable,
     hash_mb: usize,
     worker_pool: WorkerPool,
     evaluator: Evaluator,
     nodes: u64,
+    tb_hits: u64,
     seldepth: usize,
     stopped: bool,
     quit: bool,
@@ -81,6 +88,7 @@ pub struct Searcher {
     stack_moves: [Move; MAX_PLY],
     stack_pieces: [Piece; MAX_PLY],
     killers: [[Move; 2]; MAX_PLY],
+    root_moves: Vec<Move>,
     main_history: Box<[[[i16; 64]; 64]; 2]>,
     cap_history: Box<[[[i16; 6]; 64]; 6]>,
     cont_history_1: Vec<i16>,
@@ -89,6 +97,7 @@ pub struct Searcher {
     countermove: Box<[[Move; 64]; 64]>,
     root_move_offset: usize,
     tt_write_mode: TtWriteMode,
+    multi_pv: usize,
     syzygy_probe_depth: i32,
     syzygy_probe_limit: usize,
     syzygy_50_move_rule: bool,
@@ -103,6 +112,7 @@ impl Default for Searcher {
             worker_pool: WorkerPool::default(),
             evaluator: Evaluator::default(),
             nodes: 0,
+            tb_hits: 0,
             seldepth: 0,
             stopped: false,
             quit: false,
@@ -120,6 +130,7 @@ impl Default for Searcher {
             stack_moves: [Move::NULL; MAX_PLY],
             stack_pieces: [Piece::Pawn; MAX_PLY],
             killers: [[Move::NULL; 2]; MAX_PLY],
+            root_moves: Vec::new(),
             main_history: Box::new([[[0; 64]; 64]; 2]),
             cap_history: Box::new([[[0; 6]; 64]; 6]),
             cont_history_1: vec![0; CONT_SIZE],
@@ -128,6 +139,7 @@ impl Default for Searcher {
             countermove: Box::new([[Move::NULL; 64]; 64]),
             root_move_offset: 0,
             tt_write_mode: TtWriteMode::Main,
+            multi_pv: 1,
             syzygy_probe_depth: 1,
             syzygy_probe_limit: 7,
             syzygy_50_move_rule: true,
@@ -185,9 +197,17 @@ impl Searcher {
         if options.clear_hash {
             self.tt.clear();
         }
+        let old_path = syzygy::current_path();
         let largest = syzygy::initialize(&options.syzygy.path);
-        if !options.syzygy.path.is_empty() && largest == 0 {
-            println!("info string SyzygyPath loaded no usable tablebases.");
+        if old_path != options.syzygy.path && !options.syzygy.path.is_empty() {
+            if largest == 0 {
+                println!("info string SyzygyPath loaded no usable tablebases.");
+            } else {
+                let (wdl, dtz) = syzygy::tablebase_file_counts(&options.syzygy.path);
+                println!(
+                    "info string Found {wdl} WDL and {dtz} DTZ tablebase files (up to {largest}-man)."
+                );
+            }
         }
         self.worker_pool
             .set_helper_count(options.threads.saturating_sub(1));
@@ -254,22 +274,24 @@ impl Searcher {
             return self.no_legal_moves_result(&board);
         }
 
-        if let Some(result) = self.syzygy_root_result(&board, legal_moves.as_slice()) {
-            return result;
-        }
+        let syzygy_root_moves = self.syzygy_root_moves(&board, legal_moves.as_slice());
+        let root_moves = syzygy_root_moves
+            .as_deref()
+            .unwrap_or_else(|| legal_moves.as_slice());
 
         if ALLOW_PARALLEL {
             let threads = engine_options
                 .threads
                 .clamp(1, MAX_THREADS)
-                .min(legal_moves.len().max(1));
+                .min(root_moves.len().max(1));
             if threads > 1
+                && engine_options.multi_pv <= 1
                 && limits.nodes == 0
                 && self.limits.depth.min(MAX_DEPTH - 1) >= MIN_PARALLEL_DEPTH
             {
                 return self.search_parallel(
                     board,
-                    legal_moves.as_slice(),
+                    root_moves,
                     limits,
                     engine_options.clone(),
                     threads,
@@ -279,7 +301,7 @@ impl Searcher {
             }
         }
 
-        self.search_root(board, legal_moves.as_slice(), emit_info, poll)
+        self.search_root(board, root_moves, emit_info, poll)
     }
 
     fn reset_search_state(
@@ -292,12 +314,14 @@ impl Searcher {
     ) {
         self.start = Instant::now();
         self.nodes = 0;
+        self.tb_hits = 0;
         self.seldepth = 0;
         self.stopped = false;
         self.quit = false;
         self.pondering = limits.ponder;
         self.ponderhit = false;
         self.limits = compute_runtime_limits(limits, engine_options, side_to_move, MAX_DEPTH);
+        self.multi_pv = engine_options.multi_pv.clamp(1, 256);
         self.syzygy_probe_depth = engine_options.syzygy.probe_depth;
         self.syzygy_probe_limit = engine_options.syzygy.probe_limit;
         self.syzygy_50_move_rule = engine_options.syzygy.fifty_move_rule;
@@ -324,34 +348,69 @@ impl Searcher {
                 .evaluate_result(result, board.side_to_move(), 0),
             depth: 0,
             nodes: 0,
+            tb_hits: self.tb_hits,
             elapsed_ms: self.start.elapsed().as_millis(),
             exit: SearchExit::Stop,
             ponderhit: self.ponderhit,
         }
     }
 
-    fn syzygy_root_result(&self, board: &Board, legal_moves: &[Move]) -> Option<SearchResult> {
+    fn syzygy_root_moves(&mut self, board: &Board, legal_moves: &[Move]) -> Option<Vec<Move>> {
         if !self.can_probe_syzygy_root(board) || board.can_declare_draw() || self.limits.nodes > 0 {
             return None;
         }
 
-        let probe = syzygy::probe_root(board, self.syzygy_50_move_rule)?;
-        let root_move = probe.best_move?;
-        let bestmove = syzygy::legal_move_from_root_probe(board, root_move)?;
-        if !legal_moves.contains(&bestmove) {
-            return None;
+        let probe = syzygy::probe_root_moves(
+            board,
+            self.syzygy_50_move_rule,
+            board.has_repeated_position(),
+        )?;
+        self.tb_hits += 1;
+
+        let mut tb_moves = Vec::new();
+        for probe_move in &probe.moves {
+            let Some(mv) = syzygy::legal_move_from_root_probe(board, probe_move.root_move) else {
+                continue;
+            };
+            if legal_moves.contains(&mv) {
+                tb_moves.push((mv, probe_move.rank, probe_move.score));
+            }
         }
 
-        Some(SearchResult {
-            bestmove,
-            pondermove: Move::NULL,
-            score: self.score_from_syzygy_wdl(probe.wdl, 0),
-            depth: 0,
-            nodes: 0,
-            elapsed_ms: self.start.elapsed().as_millis(),
-            exit: SearchExit::Stop,
-            ponderhit: self.ponderhit,
-        })
+        let best_rank = tb_moves.iter().map(|(_, rank, _)| *rank).max()?;
+        let preferred_move = if self.multi_pv <= 1 && probe.used_dtz && best_rank != 0 {
+            syzygy::probe_root(board, self.syzygy_50_move_rule)
+                .and_then(|probe| probe.best_move)
+                .and_then(|root_move| syzygy::legal_move_from_root_probe(board, root_move))
+        } else {
+            None
+        };
+
+        if best_rank != 0
+            && let Some(preferred_move) = preferred_move
+            && tb_moves
+                .iter()
+                .any(|(tb_move, rank, _)| *tb_move == preferred_move && *rank == best_rank)
+        {
+            self.tb_hits += 1;
+            return Some(vec![preferred_move]);
+        }
+
+        let mut root_moves = Vec::with_capacity(legal_moves.len());
+        for &legal_move in legal_moves {
+            if tb_moves
+                .iter()
+                .any(|(tb_move, rank, _)| *tb_move == legal_move && *rank == best_rank)
+            {
+                root_moves.push(legal_move);
+            }
+        }
+
+        if root_moves.is_empty() {
+            None
+        } else {
+            Some(root_moves)
+        }
     }
 
     fn search_root<P: FnMut() -> SearchEvent + ?Sized>(
@@ -361,6 +420,11 @@ impl Searcher {
         emit_info: bool,
         poll: &mut P,
     ) -> SearchResult {
+        self.root_moves.clear();
+        self.root_moves.extend_from_slice(legal_moves);
+        if self.multi_pv > 1 {
+            return self.search_root_multipv(board, legal_moves, emit_info, poll);
+        }
         let mut bestmove = legal_moves[0];
         let mut pondermove = Move::NULL;
         let mut best_score = -INF_SCORE;
@@ -449,6 +513,107 @@ impl Searcher {
             score: best_score,
             depth: completed_depth,
             nodes: self.nodes,
+            tb_hits: self.tb_hits,
+            elapsed_ms: self.start.elapsed().as_millis(),
+            exit: if self.quit {
+                SearchExit::Quit
+            } else {
+                SearchExit::Stop
+            },
+            ponderhit: self.ponderhit,
+        }
+    }
+
+    fn search_root_multipv<P: FnMut() -> SearchEvent + ?Sized>(
+        &mut self,
+        mut board: Board,
+        legal_moves: &[Move],
+        emit_info: bool,
+        poll: &mut P,
+    ) -> SearchResult {
+        let mut bestmove = legal_moves[0];
+        let mut pondermove = Move::NULL;
+        let mut best_score = -INF_SCORE;
+        let mut completed_depth = 0;
+        let max_depth = self.limits.depth.min(MAX_DEPTH - 1);
+
+        for depth in 1..=max_depth {
+            let mut lines = Vec::with_capacity(legal_moves.len());
+            for &mv in legal_moves {
+                if self.check_stop(poll) {
+                    break;
+                }
+
+                let moving_piece = board.moving_piece(mv);
+                self.stack_moves[0] = mv;
+                self.stack_pieces[0] = moving_piece;
+                board.make_move_unchecked(mv);
+                let score = -self.negamax(
+                    &mut board,
+                    depth as i32 - 1,
+                    -INF_SCORE,
+                    INF_SCORE,
+                    1,
+                    true,
+                    true,
+                    Move::NULL,
+                    poll,
+                );
+                board.unmake_move(mv);
+                self.stack_moves[0] = Move::NULL;
+                self.stack_pieces[0] = Piece::Pawn;
+
+                if self.stopped || self.quit {
+                    break;
+                }
+
+                let mut pv = Vec::with_capacity(MAX_PLY);
+                pv.push(mv);
+                let child_len = self.pv_len[1].min(MAX_PLY);
+                for next_ply in 1..child_len {
+                    let child = self.pv_table[1][next_ply];
+                    if child.is_null() {
+                        break;
+                    }
+                    pv.push(child);
+                }
+                lines.push(RootLine { score, pv });
+            }
+
+            if self.stopped || self.quit || lines.is_empty() {
+                break;
+            }
+
+            lines.sort_by(|a, b| b.score.cmp(&a.score));
+            let best = &lines[0];
+            best_score = best.score;
+            bestmove = best.pv[0];
+            pondermove = best.pv.get(1).copied().unwrap_or(Move::NULL);
+            completed_depth = depth;
+            self.set_root_pv(&best.pv);
+
+            if emit_info {
+                let pv_count = self.multi_pv.min(lines.len());
+                for (index, line) in lines.iter().take(pv_count).enumerate() {
+                    self.send_info_line(depth, line.score, Some(index + 1), &line.pv);
+                }
+            }
+
+            if !self.pondering {
+                let elapsed_ms = self.elapsed_ms();
+                if elapsed_ms >= self.limits.hard_ms || elapsed_ms >= self.limits.soft_ms {
+                    break;
+                }
+            }
+        }
+
+        SearchResult {
+            bestmove,
+            pondermove,
+            score: best_score,
+            depth: completed_depth,
+            nodes: self.nodes,
+            tb_hits: self.tb_hits,
             elapsed_ms: self.start.elapsed().as_millis(),
             exit: if self.quit {
                 SearchExit::Quit
@@ -545,9 +710,11 @@ impl Searcher {
         self.root_move_offset = 0;
 
         let mut total_nodes = 0u64;
+        let mut total_tb_hits = 0u64;
         let mut quit = false;
         for result in &helper_results {
             total_nodes = total_nodes.saturating_add(result.nodes);
+            total_tb_hits = total_tb_hits.saturating_add(result.tb_hits);
             quit |= result.exit == SearchExit::Quit;
         }
         let mut best =
@@ -557,14 +724,17 @@ impl Searcher {
                 score: -INF_SCORE,
                 depth: 0,
                 nodes: 0,
+                tb_hits: 0,
                 elapsed_ms: self.start.elapsed().as_millis(),
                 exit: SearchExit::Stop,
                 ponderhit: self.ponderhit,
             });
         self.nodes = total_nodes;
+        self.tb_hits = total_tb_hits;
         self.quit = quit;
         self.stopped = true;
         best.nodes = total_nodes;
+        best.tb_hits = total_tb_hits;
         best.elapsed_ms = self.start.elapsed().as_millis();
         best.ponderhit = self.ponderhit || helper_results.iter().any(|result| result.ponderhit);
         best.exit = if quit {
@@ -756,7 +926,23 @@ impl Searcher {
             };
         }
 
-        let mut scored = self.score_moves(board, legal_moves.as_slice(), tt_move, ply);
+        let root_moves;
+        let legal_moves = if ply == 0 && !self.root_moves.is_empty() {
+            root_moves = legal_moves
+                .iter()
+                .copied()
+                .filter(|mv| self.root_moves.contains(mv))
+                .collect::<Vec<_>>();
+            if root_moves.is_empty() {
+                legal_moves.as_slice()
+            } else {
+                root_moves.as_slice()
+            }
+        } else {
+            legal_moves.as_slice()
+        };
+
+        let mut scored = self.score_moves(board, legal_moves, tt_move, ply);
         if ply == 0 && self.root_move_offset > 0 && scored.len() > 1 {
             let offset = self.root_move_offset % scored.len();
             diversify_root_scores(scored.as_mut_slice(), offset);
@@ -1373,7 +1559,7 @@ impl Searcher {
     }
 
     fn syzygy_wdl_score(
-        &self,
+        &mut self,
         board: &Board,
         depth: i32,
         ply: usize,
@@ -1382,8 +1568,9 @@ impl Searcher {
         if ply == 0 || !excluded.is_null() || !self.can_probe_syzygy(board, depth) {
             return None;
         }
-        syzygy::probe_wdl(board, self.syzygy_50_move_rule)
-            .map(|wdl| self.score_from_syzygy_wdl(wdl, ply))
+        let wdl = syzygy::probe_wdl(board, self.syzygy_50_move_rule)?;
+        self.tb_hits += 1;
+        Some(self.score_from_syzygy_wdl(wdl, ply))
     }
 
     fn can_probe_syzygy(&self, board: &Board, depth: i32) -> bool {
@@ -1476,30 +1663,64 @@ impl Searcher {
     }
 
     fn send_info(&self, depth: usize, score: i32) {
+        let pv = self.pv_table[0][..self.pv_len[0].min(MAX_PLY)]
+            .iter()
+            .copied()
+            .filter(|mv| !mv.is_null())
+            .collect::<Vec<_>>();
+        self.send_info_line(depth, score, None, &pv);
+    }
+
+    fn send_info_line(&self, depth: usize, score: i32, multipv: Option<usize>, pv: &[Move]) {
         let elapsed_ms = self.start.elapsed().as_millis();
         let nps = if elapsed_ms > 0 {
             self.nodes as u128 * 1000 / elapsed_ms
         } else {
             self.nodes as u128
         };
-        let pv = self.pv_table[0][..self.pv_len[0].min(MAX_PLY)]
+        let pv = pv
             .iter()
-            .copied()
-            .filter(|mv| !mv.is_null())
             .map(|mv| mv.to_string())
             .collect::<Vec<_>>()
             .join(" ");
-        println!(
-            "info depth {} seldepth {} score {} nodes {} nps {} hashfull {} time {} pv {}",
-            depth,
-            self.seldepth,
-            format_score(score),
-            self.nodes,
-            nps,
-            self.hashfull(),
-            elapsed_ms,
-            pv
-        );
+        if let Some(multipv) = multipv {
+            println!(
+                "info depth {} seldepth {} multipv {} score {} nodes {} nps {} hashfull {} tbhits {} time {} pv {}",
+                depth,
+                self.seldepth,
+                multipv,
+                format_score(score),
+                self.nodes,
+                nps,
+                self.hashfull(),
+                self.tb_hits,
+                elapsed_ms,
+                pv
+            );
+        } else {
+            println!(
+                "info depth {} seldepth {} score {} nodes {} nps {} hashfull {} tbhits {} time {} pv {}",
+                depth,
+                self.seldepth,
+                format_score(score),
+                self.nodes,
+                nps,
+                self.hashfull(),
+                self.tb_hits,
+                elapsed_ms,
+                pv
+            );
+        }
+    }
+
+    fn set_root_pv(&mut self, pv: &[Move]) {
+        self.pv_len[0] = pv.len().min(MAX_PLY);
+        for (index, mv) in pv.iter().take(MAX_PLY).copied().enumerate() {
+            self.pv_table[0][index] = mv;
+        }
+        for index in self.pv_len[0]..MAX_PLY {
+            self.pv_table[0][index] = Move::NULL;
+        }
     }
 
     fn result_for_no_legal_moves(&self, board: &Board) -> GameResult {
@@ -1606,5 +1827,22 @@ mod tests {
         });
 
         assert_eq!(score, -MATE_SCORE);
+    }
+
+    #[test]
+    fn search_root_respects_restricted_root_moves() {
+        let mut searcher = Searcher::default();
+        let board = Board::default();
+        let forced = board.parse_move("a2a3").expect("legal root move");
+        let engine_options = EngineOptions::default();
+        let limits = SearchLimits {
+            depth: 1.0,
+            ..SearchLimits::default()
+        };
+        searcher.reset_search_state(limits, &engine_options, board.side_to_move(), true, true);
+
+        let result = searcher.search_root(board, &[forced], false, &mut || SearchEvent::None);
+
+        assert_eq!(result.bestmove, forced);
     }
 }
