@@ -19,6 +19,8 @@ const MAX_DEPTH: usize = 100;
 const MAX_PLY: usize = 128;
 const MAX_QPLY: usize = 16;
 const MIN_PARALLEL_DEPTH: usize = 4;
+const SHARED_NODE_BATCH: u64 = 128;
+const SHARED_NODE_BATCH_MASK: u64 = SHARED_NODE_BATCH - 1;
 const TB_WIN_SCORE: i32 = MATE_SCORE - MAX_PLY as i32 * 2;
 static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
     let mut table = [[0; 64]; 64];
@@ -940,7 +942,7 @@ impl Searcher {
         }
         self.root_move_offset = 0;
 
-        let total_nodes = shared_state.nodes.load(Ordering::Relaxed);
+        let total_nodes = helper_results.iter().map(|result| result.nodes).sum();
         let total_tb_hits = shared_state.tb_hits.load(Ordering::Relaxed);
         let quit = shared_state.stop_state.load(Ordering::Relaxed) == STOP_QUIT
             || helper_results
@@ -1767,8 +1769,11 @@ impl Searcher {
         let mut good = ScoredMoveList::new();
         let mut bad = ScoredMoveList::new();
         for &mv in moves {
+            if mv == tt_move {
+                continue;
+            }
             let scored = self.score_tactical_move(board, mv, tt_move);
-            if mv == tt_move || scored.see >= 0 || mv.is_promo() {
+            if scored.see >= 0 || mv.is_promo() {
                 good.push(scored.mv, scored.score, scored.see as i32);
             } else {
                 bad.push(scored.mv, scored.score, scored.see as i32);
@@ -2279,7 +2284,17 @@ impl Searcher {
     fn record_node(&mut self) -> u64 {
         self.nodes += 1;
         if let Some(shared_state) = &self.shared_state {
-            shared_state.nodes.fetch_add(1, Ordering::Relaxed) + 1
+            let pending = self.nodes & SHARED_NODE_BATCH_MASK;
+            if pending == 0 {
+                shared_state
+                    .nodes
+                    .fetch_add(SHARED_NODE_BATCH, Ordering::Relaxed)
+                    + SHARED_NODE_BATCH
+            } else if self.limits.nodes > 0 {
+                shared_state.nodes.load(Ordering::Relaxed) + pending
+            } else {
+                self.nodes
+            }
         } else {
             self.nodes
         }
@@ -2296,7 +2311,7 @@ impl Searcher {
         self.shared_state
             .as_ref()
             .map_or(self.nodes, |shared_state| {
-                shared_state.nodes.load(Ordering::Relaxed)
+                shared_state.nodes.load(Ordering::Relaxed) + (self.nodes & SHARED_NODE_BATCH_MASK)
             })
     }
 

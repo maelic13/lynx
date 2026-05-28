@@ -53,6 +53,7 @@ fn main() {
 
     let results = [
         measure("legal movegen", "moves", || legal_movegen(&boards)),
+        measure("legal validation", "moves", || legal_validation(&boards)),
         measure("capture gen", "moves", || capture_gen(&mut capture_boards)),
         measure("make/unmake", "moves", || make_unmake(&mut mutable_boards)),
         measure("check detection", "positions", || check_detection(&boards)),
@@ -119,6 +120,22 @@ fn legal_movegen(boards: &[Board]) -> u64 {
         .iter()
         .map(|board| black_box(generate_legal_moves(black_box(board)).len() as u64))
         .sum()
+}
+
+fn legal_validation(boards: &[Board]) -> u64 {
+    let mut ops = 0u64;
+    for board in boards {
+        let moves = generate_legal_moves(board);
+        for mv in moves {
+            black_box(
+                board
+                    .legal_move(black_box(mv))
+                    .expect("generated move is legal"),
+            );
+            ops += 1;
+        }
+    }
+    ops
 }
 
 fn capture_gen(boards: &mut [Board]) -> u64 {

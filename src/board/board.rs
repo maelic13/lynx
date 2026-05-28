@@ -706,29 +706,76 @@ impl Board {
     fn king_safe_after(&self, mv: Move) -> bool {
         let us = self.side_to_move;
         let them = !us;
-        let mut after = self.clone_without_history();
-        after.make_move_unchecked(mv);
-        !after.is_attacked(after.king_sq(us), them)
+        let from = mv.from_sq();
+        let to = mv.to_sq();
+        let from_bb = Bitboard::from(from);
+        let to_bb = Bitboard::from(to);
+        let captured = self.piece_at(to).map(|(_, piece)| (to, piece));
+
+        if self.moving_piece(mv) == Piece::King {
+            return mv.is_castling()
+                || !self.is_attacked_after_capture_removed(
+                    to,
+                    them,
+                    self.all_occ ^ from_bb,
+                    captured,
+                );
+        }
+
+        let king_sq = self.king_sq(us);
+        let (occ_after, captured) = if mv.is_en_passant() {
+            let cap_sq = if us == Color::White {
+                Square(to.0 - 8)
+            } else {
+                Square(to.0 + 8)
+            };
+            (
+                (self.all_occ ^ from_bb ^ Bitboard::from(cap_sq)) | to_bb,
+                Some((cap_sq, Piece::Pawn)),
+            )
+        } else {
+            ((self.all_occ ^ from_bb) | to_bb, captured)
+        };
+        !self.is_attacked_after_capture_removed(king_sq, them, occ_after, captured)
     }
 
-    fn clone_without_history(&self) -> Self {
-        Self {
-            pieces: self.pieces,
-            occupancy: self.occupancy,
-            all_occ: self.all_occ,
-            mailbox: self.mailbox,
-            side_to_move: self.side_to_move,
-            castling: self.castling,
-            ep_sq: self.ep_sq,
-            halfmove_clock: self.halfmove_clock,
-            fullmove: self.fullmove,
-            hash: self.hash,
-            pawn_hash: self.pawn_hash,
-            minor_hash: self.minor_hash,
-            non_pawn_hash: self.non_pawn_hash,
-            checkers: self.checkers,
-            history: Vec::with_capacity(1),
+    fn is_attacked_after_capture_removed(
+        &self,
+        sq: Square,
+        attacker: Color,
+        occ: Bitboard,
+        captured: Option<(Square, Piece)>,
+    ) -> bool {
+        let atk = &*ATTACKS;
+        let captured_bb = captured
+            .map(|(captured_sq, _)| Bitboard::from(captured_sq))
+            .unwrap_or(Bitboard::EMPTY);
+        let captured_piece = captured.map(|(_, piece)| piece);
+        let pieces = |piece| {
+            let bb = self.pieces(attacker, piece);
+            if captured_piece == Some(piece) {
+                bb & !captured_bb
+            } else {
+                bb
+            }
+        };
+
+        if (atk.pawn(!attacker, sq) & pieces(Piece::Pawn)).any() {
+            return true;
         }
+        if (atk.knight(sq) & pieces(Piece::Knight)).any() {
+            return true;
+        }
+        if (atk.king(sq) & pieces(Piece::King)).any() {
+            return true;
+        }
+        if (atk.bishop(sq, occ) & (pieces(Piece::Bishop) | pieces(Piece::Queen))).any() {
+            return true;
+        }
+        if (atk.rook(sq, occ) & (pieces(Piece::Rook) | pieces(Piece::Queen))).any() {
+            return true;
+        }
+        false
     }
 
     pub fn can_declare_draw(&self) -> bool {

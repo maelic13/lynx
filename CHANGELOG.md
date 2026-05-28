@@ -2,6 +2,36 @@
 
 All notable changes to Lynx are documented in this file.
 
+## [1.4.1] - 2026-05-28
+
+Patch release focused on search hotpath profiling and NPS-oriented technical
+cleanup after the 1.4.0 TT-move safety work.
+
+### Fixed
+
+- Fixed fast legal validation for recaptures that remove a checking piece, such
+  as `...gxf6` after `Nxf6+`, by removing the captured attacker from virtual
+  attack bitboards as well as from occupancy.
+
+### Changed
+
+- Replaced clone-and-make based legal validation for TT-shaped and raw UCI
+  moves with direct occupancy-based king-safety validation. This preserves the
+  strict pseudo-legal checks from 1.4.0 while avoiding a full board clone on TT
+  hits.
+- Batched Lazy SMP shared node accounting so threaded search no longer performs
+  an aggregate atomic node increment on every searched node. Final threaded
+  search results still report exact total nodes by summing each thread result.
+- Skipped duplicate TT capture scoring in the staged move picker after the TT
+  move has already been emitted first.
+
+### Added
+
+- Added a board benchmark workload for direct legal move validation so TT/UCI
+  move-validation cost is visible in local profiling.
+- Added regression coverage for pseudo-legal pinned moves that must still be
+  rejected by the final legal validator.
+
 ## [1.4.0] - 2026-05-28
 
 Minor release focused on Stockfish-style transposition-table move safety and

@@ -119,6 +119,44 @@ fn impossible_and_friendly_occupied_moves_are_not_legal() {
 }
 
 #[test]
+fn pseudo_legal_pinned_moves_are_rejected_as_illegal() {
+    let board = Board::from_fen("k3r3/8/8/8/8/8/4R3/4K3 w - - 0 1").expect("valid FEN");
+    let pinned = Move::from_uci("e2f2").expect("valid UCI move shape");
+
+    assert!(board.is_pseudo_legal(pinned));
+    assert!(!board.is_legal(pinned));
+    assert!(board.parse_move("e2f2").is_none());
+    assert!(
+        !board
+            .generate_legal_movelist()
+            .iter()
+            .any(|&mv| mv.same_uci_move(pinned))
+    );
+}
+
+#[test]
+fn legal_move_validation_accepts_capturing_checker() {
+    let mut board = Board::starting_position();
+    for mv in [
+        "e2e4", "c7c5", "g1f3", "b8c6", "d2d4", "c5d4", "f3d4", "g8f6", "b1c3", "d7d6", "c1g5",
+        "e7e6", "d1d2", "a7a6", "e1c1", "c6d4", "d2d4", "f8e7", "f1e2", "e8g8", "c1b1", "e6e5",
+        "d4b4", "a6a5", "b4a3", "d8b6", "g5f6", "e7f6", "h1f1", "b6b4", "a3b4", "a5b4", "c3d5",
+        "c8e6", "d5f6",
+    ] {
+        assert!(
+            board.play_uci(mv),
+            "{mv} must be legal in {}",
+            board.to_fen()
+        );
+    }
+
+    let recapture = Move::from_uci("g7f6").expect("valid UCI move shape");
+    assert!(board.is_pseudo_legal(recapture));
+    assert!(board.is_legal(recapture));
+    assert!(board.parse_move("g7f6").is_some());
+}
+
+#[test]
 fn legal_move_validation_canonicalizes_move_flags() {
     let capture_board =
         Board::from_fen("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2")

@@ -102,9 +102,9 @@ Run the board implementation benchmark with:
 cargo bench --bench board
 ```
 
-This benchmark measures legal move generation, capture generation, make/unmake,
-check detection, SEE over captures, game-simulation-style move generation, and
-start-position perft depth 4.
+This benchmark measures legal move generation, direct legal move validation,
+capture generation, make/unmake, check detection, SEE over captures,
+game-simulation-style move generation, and start-position perft depth 4.
 
 ## Build From Source
 
@@ -143,6 +143,7 @@ The suite covers:
 - Strict FEN legality checks, castling-right validation, and en passant
   canonicalization
 - Legal move generation and special moves
+- Direct legal move validation for raw UCI/TT-shaped moves
 - Perft reference positions
 - Hashing and make/unmake correctness
 - Incremental pawn, minor-piece, and non-pawn structure keys
@@ -188,12 +189,12 @@ Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
 ## Releases
 
-Current documented release: `1.4.0`.
+Current documented release: `1.4.1`.
 
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)
 
-Release-preparation checks for `1.4.0`:
+Release-preparation checks for `1.4.1`:
 
 ```bash
 cargo fmt --check
@@ -202,9 +203,9 @@ cargo test
 cargo test --release
 ```
 
-The `1.4.0` build was also checked against `v1.3.4` with the built-in
-benchmark at `Threads=1` and `Threads=8` as a quick local search-speed sanity
-test.
+The `1.4.1` work was also checked against `v1.3.4` with short Cutechess
+head-to-head smoke matches at `Threads=1` and `Threads=8`, plus local board and
+search benchmarks for quick speed sanity checks.
 
 Release assets may include standalone executables for Windows, Linux, and
 Apple Silicon macOS. Intel macOS release assets are not published.
