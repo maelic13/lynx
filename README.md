@@ -181,7 +181,7 @@ Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
 ## Releases
 
-Current documented release: `1.3.3`.
+Current documented release: `1.3.4`.
 
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)

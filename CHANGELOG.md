@@ -2,6 +2,24 @@
 
 All notable changes to Lynx are documented in this file.
 
+## [1.3.4] - 2026-05-28
+
+Patch release focused on completing Stockfish-compatible UCI ponder behavior.
+
+### Fixed
+
+- Fixed `ponderhit` handling so converting a ponder search to a normal search
+  preserves elapsed thinking time instead of restarting the search clock. This
+  matches Stockfish-style behavior and prevents tournament GUIs from allowing a
+  ponder hit to consume an extra full move budget.
+
+### Added
+
+- Added interactive UCI process regression tests for completed `go ponder`
+  searches waiting for `ponderhit` or `stop` before emitting `bestmove`.
+- Added regression coverage verifying that `ponderhit` after an already-spent
+  `movetime` returns `bestmove` promptly rather than restarting the timer.
+
 ## [1.3.3] - 2026-05-28
 
 Patch release focused on UCI tournament compatibility and release-process

@@ -2181,7 +2181,6 @@ impl Searcher {
                 SearchEvent::PonderHit => {
                     self.pondering = false;
                     self.ponderhit = true;
-                    self.start = Instant::now();
                 }
                 SearchEvent::None => {}
             }
@@ -2353,6 +2352,7 @@ fn format_score(score: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn quiescence_detects_mate_after_first_qply_check() {
@@ -2383,6 +2383,26 @@ mod tests {
         let result = searcher.search_root(board, &[forced], false, &mut || SearchEvent::None);
 
         assert_eq!(result.bestmove, forced);
+    }
+
+    #[test]
+    fn ponderhit_preserves_elapsed_time_budget() {
+        let mut searcher = Searcher::default();
+        searcher.nodes = 2047;
+        searcher.pondering = true;
+        searcher.start = Instant::now() - Duration::from_millis(10);
+        searcher.limits = RuntimeLimits {
+            depth: 64,
+            nodes: 0,
+            soft_ms: 1.0,
+            hard_ms: 1.0,
+        };
+
+        let stopped = searcher.check_stop(&mut || SearchEvent::PonderHit);
+
+        assert!(stopped);
+        assert!(searcher.ponderhit);
+        assert!(!searcher.pondering);
     }
 
     #[test]
