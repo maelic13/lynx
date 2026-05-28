@@ -18,7 +18,9 @@ fn piece_at(board: &Board, square: Square) -> Option<(Color, Piece)> {
 fn search_options_parse_startpos_moves_and_go_limits() {
     let mut options = SearchOptions::default();
 
-    options.set_position(&args(&["startpos", "moves", "e2e4", "e7e5", "g1f3"]));
+    options
+        .set_position(&args(&["startpos", "moves", "e2e4", "e7e5", "g1f3"]))
+        .expect("valid startpos moves");
 
     assert_eq!(options.position.board.side_to_move(), Color::Black);
     assert_eq!(
@@ -79,13 +81,29 @@ fn search_options_parse_startpos_moves_and_go_limits() {
 }
 
 #[test]
+fn search_options_accept_uppercase_uci_move_text() {
+    let mut options = SearchOptions::default();
+
+    options
+        .set_position(&args(&["startpos", "moves", "E2E4"]))
+        .expect("uppercase UCI move text should be normalized");
+
+    assert_eq!(options.position.board.side_to_move(), Color::Black);
+    assert_eq!(
+        piece_at(&options.position.board, Square::E4),
+        Some((Color::White, Piece::Pawn))
+    );
+}
+
+#[test]
 fn search_options_default_go_and_invalid_limits_are_bounded() {
     let mut options = SearchOptions::default();
 
     options.set_search_parameters(&[]);
 
-    assert_eq!(options.limits.depth, 2.0);
+    assert_eq!(options.limits.depth, f64::INFINITY);
     assert_eq!(options.limits.nodes, 0);
+    assert_eq!(options.limits.perft, 0);
     assert!(!options.limits.infinite);
     assert!(!options.limits.ponder);
 
@@ -106,6 +124,7 @@ fn search_options_default_go_and_invalid_limits_are_bounded() {
 
     assert_eq!(options.limits.depth, 2.0);
     assert_eq!(options.limits.nodes, 0);
+    assert_eq!(options.limits.perft, 0);
     assert_eq!(options.limits.move_time, 0);
     assert_eq!(options.limits.white_time, 0);
     assert_eq!(options.limits.black_time, 0);
@@ -113,30 +132,42 @@ fn search_options_default_go_and_invalid_limits_are_bounded() {
 }
 
 #[test]
+fn search_options_parse_uci_go_perft() {
+    let mut options = SearchOptions::default();
+
+    options.set_search_parameters(&args(&["perft", "3"]));
+
+    assert_eq!(options.limits.perft, 3);
+    assert_eq!(options.limits.depth, f64::INFINITY);
+}
+
+#[test]
 fn search_options_setoption_and_reset_cover_engine_configuration() {
     let mut options = SearchOptions::default();
 
-    options.set_option(&args(&["name", "Hash", "value", "256"]));
-    options.set_option(&args(&["name", "Move", "Overhead", "value", "25"]));
-    options.set_option(&args(&["name", "Threads", "value", "99"]));
-    options.set_option(&args(&["name", "MultiPV", "value", "3"]));
-    options.set_option(&args(&["name", "SyzygyPath", "value", "C:\\TB\\WDL"]));
-    options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "6"]));
-    options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "5"]));
-    options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "false"]));
-    options.set_option(&args(&["name", "Clear", "Hash"]));
+    assert!(options.set_option(&args(&["name", "Hash", "value", "256"])));
+    assert!(options.set_option(&args(&["name", "Move", "Overhead", "value", "25"])));
+    assert!(options.set_option(&args(&["name", "Threads", "value", "99"])));
+    assert!(options.set_option(&args(&["name", "MultiPV", "value", "3"])));
+    assert!(options.set_option(&args(&["name", "Ponder", "value", "true"])));
+    assert!(options.set_option(&args(&["name", "SyzygyPath", "value", "C:\\TB\\WDL"])));
+    assert!(options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "6"])));
+    assert!(options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "5"])));
+    assert!(options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "false"])));
+    assert!(options.set_option(&args(&["name", "Clear", "Hash"])));
 
     assert_eq!(options.engine.hash_mb, 256);
     assert_eq!(options.engine.move_overhead, 25.0);
     assert_eq!(options.engine.threads, 99);
     assert_eq!(options.engine.multi_pv, 3);
+    assert!(options.engine.ponder);
     assert_eq!(options.engine.syzygy.path, "C:\\TB\\WDL");
     assert_eq!(options.engine.syzygy.probe_depth, 6);
     assert_eq!(options.engine.syzygy.probe_limit, 5);
     assert!(!options.engine.syzygy.fifty_move_rule);
     assert!(options.engine.clear_hash);
 
-    options.set_option(&args(&["name", "Threads", "value", "9999"]));
+    assert!(options.set_option(&args(&["name", "Threads", "value", "9999"])));
     assert_eq!(options.engine.threads, 1024);
 
     options.set_search_parameters(&args(&[
@@ -161,6 +192,7 @@ fn search_options_setoption_and_reset_cover_engine_configuration() {
     assert!(names.contains("option name Threads type spin default 1 min 1 max 1024"));
     assert!(names.contains("option name MultiPV type spin default 1 min 1 max 256"));
     assert!(names.contains("option name Clear Hash"));
+    assert!(names.contains("option name Ponder type check default false"));
     assert!(names.contains("option name SyzygyPath type string default <empty>"));
     assert!(names.contains("option name SyzygyProbeDepth type spin default 1 min 1 max 100"));
     assert!(names.contains("option name SyzygyProbeLimit"));
@@ -179,15 +211,15 @@ fn search_options_invalid_setoption_values_preserve_previous_values() {
     options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "5"]));
     options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "false"]));
 
-    options.set_option(&args(&["name", "Hash", "value", "bad"]));
-    options.set_option(&args(&["name", "Move", "Overhead", "value", "nan"]));
-    options.set_option(&args(&["name", "Move", "Overhead", "value", "5001"]));
-    options.set_option(&args(&["name", "Threads", "value", "bad"]));
-    options.set_option(&args(&["name", "MultiPV", "value", "bad"]));
-    options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "bad"]));
-    options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "bad"]));
-    options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "maybe"]));
-    options.set_option(&args(&["name", "Unknown", "Option", "value", "1"]));
+    assert!(options.set_option(&args(&["name", "Hash", "value", "bad"])));
+    assert!(options.set_option(&args(&["name", "Move", "Overhead", "value", "nan"])));
+    assert!(options.set_option(&args(&["name", "Move", "Overhead", "value", "5001"])));
+    assert!(options.set_option(&args(&["name", "Threads", "value", "bad"])));
+    assert!(options.set_option(&args(&["name", "MultiPV", "value", "bad"])));
+    assert!(options.set_option(&args(&["name", "SyzygyProbeDepth", "value", "bad"])));
+    assert!(options.set_option(&args(&["name", "SyzygyProbeLimit", "value", "bad"])));
+    assert!(options.set_option(&args(&["name", "Syzygy50MoveRule", "value", "maybe"])));
+    assert!(!options.set_option(&args(&["name", "Unknown", "Option", "value", "1"])));
 
     assert_eq!(options.engine.hash_mb, 128);
     assert_eq!(options.engine.move_overhead, 35.0);
@@ -240,13 +272,44 @@ fn search_options_clamp_syzygy_values_and_preserve_raw_path() {
 fn search_options_reject_illegal_position_move_without_losing_current_board() {
     let mut options = SearchOptions::default();
 
-    options.set_position(&args(&["startpos", "moves", "e2e4"]));
+    options
+        .set_position(&args(&["startpos", "moves", "e2e4"]))
+        .expect("valid startpos move");
     let expected = options.position.board.clone();
 
-    options.set_position(&args(&["startpos", "moves", "e2e5"]));
+    let err = options
+        .set_position(&args(&["startpos", "moves", "e2e5"]))
+        .expect_err("illegal position move should be reported");
 
+    assert_eq!(err, "Illegal move: e2e5");
     assert_eq!(options.position.board.hash, expected.hash);
     assert_eq!(options.position.board.to_fen(), expected.to_fen());
+}
+
+#[test]
+fn search_options_accept_little_blitzer_fullmove_zero_fen() {
+    let mut options = SearchOptions::default();
+
+    options
+        .set_position(&args(&[
+            "fen",
+            "r1bqkb1r/pppn1ppp/3p1n2/4p1B1/3PP3/2N5/PPP2PPP/R2QKBNR",
+            "w",
+            "KQkq",
+            "e6",
+            "0",
+            "0",
+            "moves",
+            "d4d5",
+        ]))
+        .expect("compatible fullmove-zero FEN");
+
+    assert_eq!(options.position.board.side_to_move(), Color::Black);
+    assert_eq!(
+        options.position.board.piece_at(Square::D5),
+        Some((Color::White, Piece::Pawn))
+    );
+    assert_eq!(options.position.board.fullmove, 1);
 }
 
 #[test]
@@ -475,23 +538,52 @@ fn search_returns_null_move_for_stalemate() {
 }
 
 #[test]
-fn search_treats_insufficient_material_as_draw() {
+fn search_returns_legal_root_move_in_drawn_material_positions() {
     for fen in [
         "8/8/8/8/8/8/4K3/6k1 w - - 0 1",
         "7k/8/8/8/8/8/4KN2/8 w - - 0 1",
         "7k/8/8/8/8/8/4KB2/8 w - - 0 1",
     ] {
         let board = Board::from_fen(fen).expect("valid draw FEN");
+        let legal_moves = board.generate_legal_movelist();
         let mut searcher = Searcher::default();
         let mut options = SearchOptions::default();
-        options.limits.depth = 4.0;
+        options.limits.depth = 1.0;
 
         let result = searcher.search(board, &options, false, || SearchEvent::None);
 
         assert_eq!(result.score, 0, "{fen}");
-        assert_eq!(result.depth, 0, "{fen}");
-        assert_eq!(result.bestmove, Move::NULL, "{fen}");
+        assert_ne!(result.bestmove, Move::NULL, "{fen}");
+        assert!(
+            legal_moves
+                .iter()
+                .any(|&legal_move| legal_move.same_uci_move(result.bestmove)),
+            "{} must be legal for {fen}",
+            result.bestmove
+        );
     }
+}
+
+#[test]
+fn search_returns_legal_move_in_root_fifty_move_claim_position() {
+    let board =
+        Board::from_fen("8/8/7k/8/1N6/1K6/4r3/8 w - - 100 1").expect("valid fifty-move claim FEN");
+    let legal_moves = board.generate_legal_movelist();
+    let mut searcher = Searcher::default();
+    let mut options = SearchOptions::default();
+    options.limits.depth = 1.0;
+
+    let result = searcher.search(board, &options, false, || SearchEvent::None);
+
+    assert_ne!(result.bestmove, Move::NULL);
+    assert_eq!(result.score, 0);
+    assert!(
+        legal_moves
+            .iter()
+            .any(|&legal_move| legal_move.same_uci_move(result.bestmove)),
+        "{} must be legal",
+        result.bestmove
+    );
 }
 
 #[test]

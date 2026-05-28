@@ -385,9 +385,6 @@ impl Searcher {
         self.reset_search_state(&limits, &engine_options, root.side_to_move(), true, true);
 
         let board = root;
-        if board.can_declare_draw() {
-            return self.draw_result();
-        }
         let legal_moves = board.generate_legal_movelist();
         if legal_moves.is_empty() {
             return self.no_legal_moves_result(&board);
@@ -488,20 +485,6 @@ impl Searcher {
             score: self
                 .evaluator
                 .evaluate_result(result, board.side_to_move(), 0),
-            depth: 0,
-            nodes: 0,
-            tb_hits: self.tb_hits,
-            elapsed_ms: self.start.elapsed().as_millis(),
-            exit: SearchExit::Stop,
-            ponderhit: self.ponderhit,
-        }
-    }
-
-    fn draw_result(&self) -> SearchResult {
-        SearchResult {
-            bestmove: Move::NULL,
-            pondermove: Move::NULL,
-            score: 0,
             depth: 0,
             nodes: 0,
             tb_hits: self.tb_hits,

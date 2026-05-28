@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::process;
 use std::sync::{Arc, mpsc};
 
 use crate::bench::DEFAULT_BENCH_DEPTH;
@@ -31,7 +32,11 @@ impl UciProtocol {
                 self.commands.push(EngineCommand::quit(0));
                 break;
             }
-            let input: Vec<String> = input.split_whitespace().map(str::to_string).collect();
+            let command_line = input.trim().to_string();
+            let input: Vec<String> = command_line
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
             if input.is_empty() {
                 continue;
             }
@@ -45,14 +50,14 @@ impl UciProtocol {
                 "stop" => self.stop(),
                 "setoption" => self.set_option(args),
                 "ucinewgame" => self.new_game(),
-                "position" => self.position(args),
+                "position" => self.position_with_command(args, &command_line),
                 "bench" => self.bench(args),
                 "ponderhit" => self.ponderhit(),
                 "quit" => {
                     self.quit();
                     break;
                 }
-                _ => continue,
+                _ => self.unknown_command(&command_line),
             }
         }
     }
@@ -88,6 +93,11 @@ impl UciProtocol {
 
     fn go(&mut self, args: &[String]) {
         self.search_options.set_search_parameters(args);
+        if self.search_options.limits.perft > 0 {
+            self.run_perft(self.search_options.limits.perft);
+            return;
+        }
+
         let epoch = self.control.start_replacing_search();
         self.commands
             .push(EngineCommand::go(self.search_options.clone(), epoch));
@@ -99,10 +109,12 @@ impl UciProtocol {
     }
 
     fn set_option(&mut self, args: &[String]) {
-        self.search_options.set_option(args);
-        self.commands
-            .push(EngineCommand::configure(self.search_options.clone()));
-        self.search_options.engine.clear_hash = false;
+        self.wait_for_search_finished();
+        if self.search_options.set_option(args) {
+            self.commands
+                .push(EngineCommand::configure(self.search_options.clone()));
+            self.search_options.engine.clear_hash = false;
+        }
     }
 
     fn new_game(&mut self) {
@@ -110,8 +122,10 @@ impl UciProtocol {
         self.commands.push(EngineCommand::new_game());
     }
 
-    fn position(&mut self, args: &[String]) {
-        self.search_options.set_position(args);
+    fn position_with_command(&mut self, args: &[String], full_command: &str) {
+        if let Err(message) = self.search_options.set_position(args) {
+            terminate_on_critical_error(full_command, &message);
+        }
     }
 
     fn bench(&mut self, args: &[String]) {
@@ -133,10 +147,40 @@ impl UciProtocol {
         self.control.request_ponderhit();
         self.commands.push(EngineCommand::ponderhit());
     }
+
+    fn run_perft(&self, depth: u32) {
+        let mut board = self.search_options.position.board.clone();
+        let nodes = board.perft(depth);
+        println!("\nNodes searched: {nodes}\n");
+        flush_stdout();
+    }
+
+    fn wait_for_search_finished(&self) {
+        if !self.control.is_searching() {
+            return;
+        }
+        let (ready_tx, ready_rx) = mpsc::channel();
+        self.commands.push(EngineCommand::ready(ready_tx));
+        let _ = ready_rx.recv();
+    }
+
+    fn unknown_command(&self, command_line: &str) {
+        if command_line.is_empty() || command_line.starts_with('#') {
+            return;
+        }
+        println!("Unknown command: '{command_line}'. Type help for more information.");
+        flush_stdout();
+    }
 }
 
 fn flush_stdout() {
     io::stdout().flush().expect("stdout flush failed");
+}
+
+fn terminate_on_critical_error(full_command: &str, message: &str) -> ! {
+    println!("info string CRITICAL ERROR: Command `{full_command}` failed. Reason: {message}");
+    flush_stdout();
+    process::exit(1);
 }
 
 #[cfg(test)]
@@ -159,7 +203,10 @@ mod tests {
     fn go_sends_current_position_with_search_parameters() {
         let (mut protocol, commands) = protocol_fixture();
 
-        protocol.position(&args(&["startpos", "moves", "e2e4"]));
+        protocol.position_with_command(
+            &args(&["startpos", "moves", "e2e4"]),
+            "position startpos moves e2e4",
+        );
         protocol.go(&args(&["depth", "3", "nodes", "123"]));
 
         let command = commands.wait_pop();
@@ -221,6 +268,16 @@ mod tests {
                 .path,
             "D:\\TB MixedCase"
         );
+
+        protocol.set_option(&args(&["name", "Ponder", "value", "true"]));
+        let ponder_command = commands.wait_pop();
+        assert!(
+            ponder_command
+                .configure
+                .expect("ponder command must configure engine")
+                .engine
+                .ponder
+        );
     }
 
     #[test]
@@ -244,7 +301,10 @@ mod tests {
     fn newgame_resets_position_and_sends_marker_command() {
         let (mut protocol, commands) = protocol_fixture();
 
-        protocol.position(&args(&["startpos", "moves", "e2e4"]));
+        protocol.position_with_command(
+            &args(&["startpos", "moves", "e2e4"]),
+            "position startpos moves e2e4",
+        );
         assert_eq!(
             protocol.search_options.position.board.piece_at(Square::E4),
             Some((Color::White, Piece::Pawn))

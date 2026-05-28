@@ -2,6 +2,45 @@
 
 All notable changes to Lynx are documented in this file.
 
+## [1.3.3] - 2026-05-28
+
+Patch release focused on UCI tournament compatibility and release-process
+coverage.
+
+### Added
+
+- Added UCI `go perft N` support so GUI and tournament tools can ask the engine
+  to count legal leaf nodes from the current position without starting a normal
+  search.
+- Added the advertised UCI `Ponder` option. This lets frontends discover that
+  Lynx supports ponder-mode command flow even though the option itself is only a
+  protocol setting.
+- Added process-level UCI regression tests that launch the built engine binary
+  and verify option advertisement, diagnostics, `go perft`, uppercase move
+  input, and critical invalid-position handling.
+
+### Changed
+
+- Changed invalid `position` failures to report a clear critical UCI error and
+  exit instead of continuing from the previous board state.
+- Changed unknown UCI commands and unknown options to print explicit diagnostic
+  messages.
+- Changed empty `go` commands to run as an unbounded search until a limit or
+  control command stops the search, instead of using a hidden shallow default.
+- Changed UCI coordinate move parsing to accept uppercase square text, while
+  still normalizing internally to the canonical lowercase move form.
+- Changed `setoption` handling to wait for any active search to finish before
+  applying engine configuration.
+
+### Fixed
+
+- Fixed compatibility with tournament managers that emit the common
+  non-standard fullmove number `0` by normalizing it to fullmove `1` during FEN
+  parsing.
+- Fixed root draw positions, including fifty-move claim and dead-material
+  positions, so the engine still returns a legal move when legal moves exist.
+  `bestmove 0000` is now reserved for positions with no legal moves.
+
 ## [1.3.2] - 2026-05-28
 
 ### Added
@@ -45,8 +84,8 @@ All notable changes to Lynx are documented in this file.
 - Added stricter FEN validation for complete ranks, legal pawn ranks, one king
   per side, adjacent kings, side-not-to-move check legality, castling-right
   consistency, and valid move counters.
-- Added Stockfish-style en passant canonicalization so EP squares are kept and
-  hashed only when a legal en passant capture exists.
+- Added canonical en passant hashing so EP squares are kept in the position key
+  only when a legal en passant capture exists.
 - Added continuation correction history to the handcrafted-evaluation
   correction path.
 - Added UCI `go searchmoves` root filtering and `go mate` depth handling.
@@ -62,8 +101,8 @@ All notable changes to Lynx are documented in this file.
   return values.
 - Added staged main-search move picking so captures can be searched before
   quiet moves are generated at non-root non-check nodes.
-- Reworked soft/hard clock allocation with a more Stockfish-style horizon,
-  explicit `movestogo` support, increment handling, and move-overhead reserve.
+- Reworked soft/hard clock allocation with a move-count horizon, explicit
+  `movestogo` support, increment handling, and move-overhead reserve.
 - Extended quiescence search depth and avoided static-evaluation fallback while
   still in check.
 - Made quiet halfmove-clock increments saturating for robustness on high-clock
@@ -141,8 +180,8 @@ All notable changes to Lynx are documented in this file.
 
 - Changed root tablebase behavior to filter and search tablebase-correct root
   moves instead of immediately returning a single zero-node root move.
-- Improved Stockfish compatibility for Syzygy UCI defaults and practical root
-  tablebase usage.
+- Improved Syzygy UCI defaults and practical root tablebase usage for common
+  GUI and tournament-manager setups.
 - Passed repetition state into root DTZ probing so root tablebase ranking can
   account for repeated positions.
 - Specialized color-specific attack lookup and reduced repeated bitboard
@@ -194,8 +233,8 @@ Patch release focused on UCI tournament reliability.
 ### Fixed
 
 - Delayed `bestmove` emission for completed `go ponder ...` searches until
-  `ponderhit`, `stop`, or `quit`, matching the Stockfish-style UCI control flow
-  where a completed ponder result is retained but not reported early.
+  `ponderhit`, `stop`, or `quit`, matching the UCI expectation that a completed
+  ponder result is retained but not reported early.
 - Delayed `bestmove` emission for completed `go infinite` searches until
   `stop` or `quit`.
 - Preserved the `ponder` flag when parsing combined `go ponder infinite`

@@ -26,6 +26,7 @@ pub struct EngineOptions {
     pub move_overhead: f64,
     pub hash_mb: usize,
     pub clear_hash: bool,
+    pub ponder: bool,
     pub threads: usize,
     pub multi_pv: usize,
     pub syzygy: SyzygyOptions,
@@ -37,6 +38,7 @@ impl Default for EngineOptions {
             move_overhead: 10.0,
             hash_mb: 64,
             clear_hash: false,
+            ponder: false,
             threads: 1,
             multi_pv: 1,
             syzygy: SyzygyOptions::default(),
@@ -67,6 +69,7 @@ pub struct SearchLimits {
     pub depth: f64,
     pub movestogo: usize,
     pub nodes: u64,
+    pub perft: u32,
     pub infinite: bool,
     pub ponder: bool,
     pub search_moves: Vec<Move>,
@@ -82,6 +85,7 @@ impl SearchLimits {
         self.depth = f64::INFINITY;
         self.movestogo = 0;
         self.nodes = 0;
+        self.perft = 0;
         self.infinite = false;
         self.ponder = false;
         self.search_moves.clear();
@@ -99,6 +103,7 @@ impl Default for SearchLimits {
             depth: f64::INFINITY,
             movestogo: 0,
             nodes: 0,
+            perft: 0,
             infinite: false,
             ponder: false,
             search_moves: Vec::new(),
@@ -118,6 +123,7 @@ impl SearchOptions {
         Vec::from([
             String::from("option name Hash type spin default 64 min 1 max 33554432"),
             String::from("option name Clear Hash type button"),
+            String::from("option name Ponder type check default false"),
             String::from("option name Move Overhead type spin default 10 min 0 max 5000"),
             format!("option name Threads type spin default 1 min 1 max {MAX_THREADS}"),
             String::from("option name MultiPV type spin default 1 min 1 max 256"),
@@ -133,10 +139,9 @@ impl SearchOptions {
         self.limits.reset_temporary_parameters();
     }
 
-    pub fn set_position(&mut self, args: &[String]) {
+    pub fn set_position(&mut self, args: &[String]) -> Result<(), String> {
         if args.is_empty() {
-            println!("info string Invalid position command.");
-            return;
+            return Ok(());
         }
 
         let mut board = if args[0] == "startpos" {
@@ -147,21 +152,15 @@ impl SearchOptions {
                 .take_while(|part| part.as_str() != "moves")
                 .map(String::as_str)
                 .collect();
-            if fen_parts.is_empty() {
-                println!("info string Invalid FEN.");
-                return;
-            }
             let fen = fen_parts.join(" ");
             match Board::from_fen(&fen) {
                 Ok(board) => board,
                 Err(_) => {
-                    println!("info string Invalid FEN.");
-                    return;
+                    return Err(String::from("Invalid FEN."));
                 }
             }
         } else {
-            println!("info string Invalid position command.");
-            return;
+            return Ok(());
         };
 
         let moves_start_index = args
@@ -171,16 +170,15 @@ impl SearchOptions {
 
         for move_text in &args[moves_start_index..] {
             if Move::from_uci(move_text).is_none() {
-                println!("info string Invalid move: {}", move_text);
-                return;
+                return Err(format!("Illegal move: {move_text}"));
             }
             if !board.play_uci(move_text) {
-                println!("info string Illegal move: {}", move_text);
-                return;
+                return Err(format!("Illegal move: {move_text}"));
             }
         }
 
         self.position.board = board;
+        Ok(())
     }
 
     pub fn set_search_parameters(&mut self, args: &[String]) {
@@ -194,10 +192,6 @@ impl SearchOptions {
             self.limits.infinite = true;
         }
 
-        if args.is_empty() {
-            self.limits.depth = 2.0;
-        }
-
         let move_time_index = args.iter().position(|r| r == "movetime");
         let white_time_index = args.iter().position(|r| r == "wtime");
         let white_increment_index = args.iter().position(|r| r == "winc");
@@ -207,6 +201,7 @@ impl SearchOptions {
         let mate_index = args.iter().position(|r| r == "mate");
         let movestogo_index = args.iter().position(|r| r == "movestogo");
         let nodes_index = args.iter().position(|r| r == "nodes");
+        let perft_index = args.iter().position(|r| r == "perft");
         let searchmoves_index = args.iter().position(|r| r == "searchmoves");
 
         if let Some(index) = move_time_index {
@@ -240,6 +235,9 @@ impl SearchOptions {
         if let Some(index) = nodes_index {
             self.limits.nodes = Self::parse_u64(args, index, "nodes");
         }
+        if let Some(index) = perft_index {
+            self.limits.perft = Self::parse_u32(args, index, "perft");
+        }
         if let Some(index) = searchmoves_index {
             for token in args.iter().skip(index + 1) {
                 if Self::is_go_parameter(token) {
@@ -255,40 +253,59 @@ impl SearchOptions {
         }
     }
 
-    pub fn set_option(&mut self, args: &[String]) {
-        let name_index = args.iter().position(|r| r == "name");
-        let value_index = args.iter().position(|r| r == "value");
-
-        if name_index.is_none() {
-            println!("Invalid setoption command.");
-            return;
+    pub fn set_option(&mut self, args: &[String]) -> bool {
+        let mut index = 0;
+        if index < args.len() {
+            index += 1; // Consume the leading "name" token unconditionally.
         }
 
-        let name_end = value_index.unwrap_or(args.len());
-        if name_index.unwrap() >= name_end {
-            println!("Invalid setoption command.");
-            return;
+        let mut name_parts = Vec::new();
+        while index < args.len() && args[index] != "value" {
+            name_parts.push(args[index].as_str());
+            index += 1;
         }
 
-        let option_name: &str = &args[name_index.unwrap() + 1..name_end]
-            .join(" ")
-            .to_lowercase();
-        let value_raw = value_index
-            .map(|index| args[index + 1..].join(" "))
-            .unwrap_or_default();
+        let mut value_parts = Vec::new();
+        if index < args.len() && args[index] == "value" {
+            index += 1;
+            while index < args.len() {
+                value_parts.push(args[index].as_str());
+                index += 1;
+            }
+        }
+
+        let option_name_raw = name_parts.join(" ");
+        let option_name = option_name_raw.to_lowercase();
+        let value_raw = value_parts.join(" ");
         let value = value_raw.to_lowercase();
 
-        match option_name {
+        match option_name.as_str() {
             "hash" => {
                 if let Ok(hash_mb) = value.parse::<usize>() {
                     self.engine.hash_mb = hash_mb.clamp(1, 33_554_432);
                 } else {
                     println!("info string Invalid Hash value.");
                 }
+                true
             }
             "clear hash" => {
                 self.engine.clear_hash = true;
+                true
             }
+            "ponder" => match value.as_str() {
+                "true" => {
+                    self.engine.ponder = true;
+                    true
+                }
+                "false" => {
+                    self.engine.ponder = false;
+                    true
+                }
+                _ => {
+                    println!("info string Invalid Ponder value.");
+                    true
+                }
+            },
             "move overhead" => {
                 if let Ok(move_overhead) = value.parse::<f64>()
                     && move_overhead.is_finite()
@@ -298,6 +315,7 @@ impl SearchOptions {
                 } else {
                     println!("info string Invalid Move Overhead value.");
                 }
+                true
             }
             "threads" => {
                 if let Ok(threads) = value.parse::<usize>() {
@@ -305,6 +323,7 @@ impl SearchOptions {
                 } else {
                     println!("info string Invalid Threads value.");
                 }
+                true
             }
             "multipv" => {
                 if let Ok(multi_pv) = value.parse::<usize>() {
@@ -312,9 +331,11 @@ impl SearchOptions {
                 } else {
                     println!("info string Invalid MultiPV value.");
                 }
+                true
             }
             "syzygypath" => {
                 self.engine.syzygy.path = value_raw;
+                true
             }
             "syzygyprobedepth" => {
                 if let Ok(depth) = value.parse::<i32>() {
@@ -322,6 +343,7 @@ impl SearchOptions {
                 } else {
                     println!("info string Invalid SyzygyProbeDepth value.");
                 }
+                true
             }
             "syzygyprobelimit" => {
                 if let Ok(limit) = value.parse::<usize>() {
@@ -329,13 +351,26 @@ impl SearchOptions {
                 } else {
                     println!("info string Invalid SyzygyProbeLimit value.");
                 }
+                true
             }
             "syzygy50moverule" => match value.as_str() {
-                "true" => self.engine.syzygy.fifty_move_rule = true,
-                "false" => self.engine.syzygy.fifty_move_rule = false,
-                _ => println!("info string Invalid Syzygy50MoveRule value."),
+                "true" => {
+                    self.engine.syzygy.fifty_move_rule = true;
+                    true
+                }
+                "false" => {
+                    self.engine.syzygy.fifty_move_rule = false;
+                    true
+                }
+                _ => {
+                    println!("info string Invalid Syzygy50MoveRule value.");
+                    true
+                }
             },
-            _ => {}
+            _ => {
+                println!("No such option: {option_name_raw}");
+                false
+            }
         }
     }
 
@@ -369,6 +404,16 @@ impl SearchOptions {
         }
     }
 
+    fn parse_u32(args: &[String], index: usize, name: &str) -> u32 {
+        match args.get(index + 1).and_then(|value| value.parse().ok()) {
+            Some(value) => value,
+            None => {
+                println!("info string Invalid {} value.", name);
+                0
+            }
+        }
+    }
+
     fn is_go_parameter(token: &str) -> bool {
         matches!(
             token,
@@ -381,6 +426,7 @@ impl SearchOptions {
                 | "movestogo"
                 | "depth"
                 | "nodes"
+                | "perft"
                 | "mate"
                 | "movetime"
                 | "infinite"

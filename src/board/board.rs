@@ -225,9 +225,8 @@ impl Board {
         if let Some(s) = parts.get(5) {
             board.fullmove = s
                 .parse::<u16>()
-                .ok()
-                .filter(|fullmove| *fullmove > 0)
-                .ok_or_else(|| format!("invalid fullmove number: {s}"))?;
+                .map_err(|_| format!("invalid fullmove number: {s}"))?
+                .max(1);
         }
 
         board.validate_position()?;

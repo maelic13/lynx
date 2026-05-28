@@ -178,6 +178,7 @@ impl Move {
         if input.len() != 4 && input.len() != 5 {
             return None;
         }
+        let input = input.to_ascii_lowercase();
         let from = Square::from_algebraic(&input[0..2])?;
         let to = Square::from_algebraic(&input[2..4])?;
         let flags = if input.len() == 5 {

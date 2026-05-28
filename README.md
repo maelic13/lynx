@@ -10,8 +10,8 @@ speaks the UCI protocol.
 - Legal move generation for all standard chess rules, including castling,
   en passant, promotions, repetition, the fifty-move rule, and insufficient
   material detection
-- Strict FEN validation with canonical en passant hashing compatible with
-  Stockfish-style transposition behavior
+- Strict FEN validation with canonical en passant hashing so positions without
+  a legal en passant capture share the same transposition key
 - Zobrist hashing, transposition table, and pawn evaluation cache
 - Iterative deepening negamax/PVS search with aspiration windows
 - Configurable Lazy SMP-style parallel search with persistent workers and a
@@ -28,8 +28,8 @@ speaks the UCI protocol.
   low-ply history, pawn history, capture history, and continuation history
 - Multi-table and continuation correction history with handcrafted tapered
   evaluation and fifty-move-rule dampening
-- Stockfish-style soft/hard time allocation with `movestogo`, increment, and
-  move-overhead handling
+- Soft/hard time allocation with `movestogo`, increment, and move-overhead
+  handling
 - Optional Syzygy tablebase probing through the UCI `SyzygyPath`,
   `SyzygyProbeDepth`, `SyzygyProbeLimit`, and `Syzygy50MoveRule` options,
   with root DTZ ranking, WDL fallback, load summaries, and `tbhits` reporting
@@ -45,7 +45,7 @@ Supported commands include:
 - `position startpos [moves ...]`
 - `position fen <fen> [moves ...]`
 - `go` with `depth`, `nodes`, `movetime`, `wtime`, `btime`, `winc`, `binc`,
-  `movestogo`, `mate`, `searchmoves`, `ponder`, and `infinite`
+  `movestogo`, `mate`, `searchmoves`, `ponder`, `perft`, and `infinite`
 - `stop`
 - `ponderhit`
 - `quit`
@@ -55,6 +55,7 @@ Supported options:
 
 - `Hash` default `64`
 - `Clear Hash`
+- `Ponder` default `false`
 - `Move Overhead` default `10`
 - `Threads` default `1`, min `1`, max `1024`
 - `MultiPV` default `1`, min `1`, max `256`
@@ -144,6 +145,8 @@ The suite covers:
 - Incremental pawn, minor-piece, and non-pawn structure keys
 - Draw and terminal-result handling
 - Insufficient-material draw handling at search root and interior nodes
+- Legal `bestmove` reporting from root draw positions where legal moves still
+  exist
 - Search limits, invalid limit parsing, and stop/quit behavior
 - UCI `go searchmoves` root filtering and `go mate` depth conversion
 - Time-management behavior for fast clocks, `movetime`, side-to-move clocks,
@@ -157,6 +160,7 @@ The suite covers:
 - UCI command ordering, priority quit/stop handling, and stale-search
   cancellation
 - UCI ponder and infinite-search `bestmove` release timing
+- FEN compatibility for tournament managers that emit non-standard fullmove `0`
 - Quiet/capture move-generation partitioning
 - Evaluation and transposition table behavior
 - Current-generation `hashfull` accounting for local and shared transposition
@@ -177,7 +181,7 @@ Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
 ## Releases
 
-Current documented release: `1.3.2`.
+Current documented release: `1.3.3`.
 
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)
@@ -202,3 +206,10 @@ If unsure, use the plain `x86-64` or `arm64` asset for your operating system.
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
+
+## Acknowledgements
+
+Lynx is an independent engine, but it benefits from the open chess-engine
+community's published ideas, testing practices, and protocol conventions.
+Special thanks to Stockfish and its team for the inspiration their work provides
+to chess engine authors and testers.

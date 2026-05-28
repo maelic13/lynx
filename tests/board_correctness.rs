@@ -262,6 +262,15 @@ fn fen_round_trip_preserves_state() {
 }
 
 #[test]
+fn fen_fullmove_zero_is_normalized_to_first_fullmove() {
+    let board =
+        Board::from_fen("4k3/8/8/8/8/8/8/4K3 w - - 0 0").expect("compatible fullmove-zero FEN");
+
+    assert_eq!(board.fullmove, 1);
+    assert_eq!(board.to_fen(), "4k3/8/8/8/8/8/8/4K3 w - - 0 1");
+}
+
+#[test]
 fn perft_matches_common_reference_counts() {
     let cases = [
         (STARTING_FEN, 0, 1),
@@ -935,7 +944,7 @@ fn ep_square_is_recorded_only_when_a_legal_capture_exists() {
     assert_eq!(board.ep_square(), None, "no EP at start");
 
     // A double pawn push without an opposing pawn able to capture is canonicalized
-    // to no EP square, matching Stockfish-style hashing.
+    // to no EP square, matching canonical transposition hashing.
     board.play_uci("e2e4");
     assert_eq!(board.ep_square(), None, "1.e4 has no legal EP capture");
 
