@@ -25,8 +25,8 @@ speaks the UCI protocol.
 - Staged move picking with a validated TT move first, good captures before lazy
   quiet generation, and bad captures delayed until after quiet moves
 - Move ordering using TT moves, threshold SEE, killers, countermoves, main
-  history, low-ply history, pawn history, capture history, and continuation
-  history
+  history, eight-ply low-ply history, pawn history, capture history,
+  continuation history, and a direct-check bonus for quiet checking moves
 - Direct legal validation for raw UCI and TT-shaped moves, including
   canonicalized captures, castling, en passant, and promotions
 - Multi-table and continuation correction history with handcrafted tapered
@@ -160,6 +160,8 @@ The suite covers:
   ponderhit behavior
 - Threshold SEE behavior for captures and promotions
 - Staged move-picker ordering for bad captures after quiet moves
+- Direct-check quiet move-ordering bonus
+- Eight-ply low-ply history scoring and update boundaries
 - Syzygy option parsing, result decoding, root move conversion, root tablebase
   probing, tablebase path counting, and disabled-path probe behavior
 - UCI command ordering, priority quit/stop handling, and stale-search
@@ -191,6 +193,9 @@ Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
 Current documented release: `1.4.1`.
 
+`1.4.1` is the first public release in the 1.4 series and includes the
+unreleased 1.4.0 TT/hash-move safety work.
+
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)
 
@@ -203,9 +208,10 @@ cargo test
 cargo test --release
 ```
 
-The `1.4.1` work was also checked against `v1.3.4` with short Cutechess
-head-to-head smoke matches at `Threads=1` and `Threads=8`, plus local board and
-search benchmarks for quick speed sanity checks.
+The `1.4.1` work was also checked against the previous local baseline commit
+`11a7a07` with short Cutechess head-to-head smoke matches at `Threads=1` and
+`Threads=8`, plus local board and search benchmarks for quick speed sanity
+checks.
 
 Release assets may include standalone executables for Windows, Linux, and
 Apple Silicon macOS. Intel macOS release assets are not published.

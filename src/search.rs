@@ -21,6 +21,7 @@ const MAX_QPLY: usize = 16;
 const MIN_PARALLEL_DEPTH: usize = 4;
 const SHARED_NODE_BATCH: u64 = 128;
 const SHARED_NODE_BATCH_MASK: u64 = SHARED_NODE_BATCH - 1;
+const DIRECT_CHECK_BONUS: i32 = 32_000;
 const TB_WIN_SCORE: i32 = MATE_SCORE - MAX_PLY as i32 * 2;
 static LMR_TABLE: LazyLock<[[i32; 64]; 64]> = LazyLock::new(|| {
     let mut table = [[0; 64]; 64];
@@ -302,6 +303,7 @@ fn tt_scored_move(board: &Board, mv: Move) -> ScoredMove {
         mv,
         score: 30_000_000,
         see,
+        quiet_history: 0,
     }
 }
 
@@ -1038,13 +1040,7 @@ impl Searcher {
             return score;
         }
         let tt_entry = self.tt.probe(hash);
-        let mut tt_move = tt_entry
-            .and_then(|entry| entry.best_move())
-            .and_then(|mv| board.legal_move(mv))
-            .unwrap_or(Move::NULL);
-        if ply == 0 && !self.root_moves.is_empty() && !self.root_moves.contains(&tt_move) {
-            tt_move = Move::NULL;
-        }
+        let tt_raw_move = tt_entry.and_then(|entry| entry.best_move());
         let tt_score = tt_entry
             .map(|entry| score_from_tt(entry.score as i32, ply, board.halfmove_clock))
             .unwrap_or(VALUE_NONE);
@@ -1063,6 +1059,12 @@ impl Searcher {
                 Bound::Upper if score <= alpha => return score,
                 _ => {}
             }
+        }
+        let mut tt_move = tt_raw_move
+            .and_then(|mv| board.legal_move(mv))
+            .unwrap_or(Move::NULL);
+        if ply == 0 && !self.root_moves.is_empty() && !self.root_moves.contains(&tt_move) {
+            tt_move = Move::NULL;
         }
 
         if !is_pv && excluded.is_null() && depth >= 4 && (tt_move.is_null() || tt_depth < depth - 3)
@@ -1274,11 +1276,7 @@ impl Searcher {
             let see = if is_capture { picked.see as i32 } else { 0 };
             let moving_piece = board.moving_piece(mv);
             let captured_piece = board.captured_piece(mv);
-            let quiet_hist = if is_quiet {
-                self.quiet_history_score(board, board.side_to_move(), mv, ply)
-            } else {
-                0
-            };
+            let quiet_hist = if is_quiet { picked.quiet_history } else { 0 };
             let mut gives_check = None;
 
             if !is_pv && !in_check && searched > 0 {
@@ -1568,10 +1566,7 @@ impl Searcher {
         let hash = board.hash;
         let original_alpha = alpha;
         let tt_entry = self.tt.probe(hash);
-        let tt_move = tt_entry
-            .and_then(|entry| entry.best_move())
-            .and_then(|mv| board.legal_move(mv))
-            .unwrap_or(Move::NULL);
+        let tt_raw_move = tt_entry.and_then(|entry| entry.best_move());
         if let Some(entry) = tt_entry
             && entry.depth >= 0
             && let Some(bound) = entry.bound()
@@ -1584,6 +1579,9 @@ impl Searcher {
                 _ => {}
             }
         }
+        let tt_move = tt_raw_move
+            .and_then(|mv| board.legal_move(mv))
+            .unwrap_or(Move::NULL);
 
         let mut q_raw_static_eval = VALUE_NONE;
         let mut stand_pat_for_pruning = VALUE_NONE;
@@ -1736,13 +1734,13 @@ impl Searcher {
             } else if mv.is_capture() {
                 let attacker = board.moving_piece(mv);
                 let victim = board.captured_piece(mv).unwrap_or(Piece::Pawn);
-                see = board.see(mv);
                 let hist =
                     self.cap_history[attacker as usize][mv.to_sq().index()][victim as usize] as i32;
-                if see >= 0 {
-                    20_000_000 + 32 * see + 10 * piece_value(victim) - piece_value(attacker) + hist
+                if board.see_ge(mv, 0) {
+                    20_000_000 + 16 * piece_value(victim) - piece_value(attacker) + hist
                 } else {
-                    -2_000_000 + see + hist
+                    see = -1;
+                    -2_000_000 + 16 * piece_value(victim) - piece_value(attacker) + hist
                 }
             } else if mv.is_promo() {
                 18_000_000 + piece_value(mv.promo_piece())
@@ -1755,7 +1753,18 @@ impl Searcher {
             } else {
                 self.quiet_history_score(board, board.side_to_move(), mv, ply)
             };
-            scored.push(mv, score, see);
+            let quiet_history = if !mv.is_capture()
+                && !mv.is_promo()
+                && mv != tt_move
+                && mv != self.killers[ply][0]
+                && mv != self.killers[ply][1]
+                && mv != counter
+            {
+                score
+            } else {
+                0
+            };
+            scored.push_with_history(mv, score, see, quiet_history);
         }
         scored
     }
@@ -1824,6 +1833,7 @@ impl Searcher {
             mv,
             score,
             see: see as i16,
+            quiet_history: 0,
         }
     }
 
@@ -1838,7 +1848,12 @@ impl Searcher {
         } else {
             0
         };
-        2 * main + pawn + low_ply + self.cont_score(ply, piece, to)
+        let direct_check = if board.gives_check(mv) {
+            DIRECT_CHECK_BONUS
+        } else {
+            0
+        };
+        2 * main + pawn + low_ply + self.cont_score(ply, piece, to) + direct_check
     }
 
     fn cont_score(&self, ply: usize, piece: usize, to: usize) -> i32 {
@@ -2235,7 +2250,9 @@ impl Searcher {
 
     fn check_stop<P: FnMut() -> SearchEvent + ?Sized>(&mut self, poll: &mut P) -> bool {
         let total_nodes = self.record_node();
-        if let Some(shared_state) = &self.shared_state {
+        if let Some(shared_state) = &self.shared_state
+            && (self.limits.nodes > 0 || self.nodes & SHARED_NODE_BATCH_MASK == 0)
+        {
             match shared_state.stop_state.load(Ordering::Relaxed) {
                 STOP_QUIT => {
                     self.quit = true;
@@ -2528,6 +2545,7 @@ fn format_score(score: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::board::Square;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -2656,6 +2674,84 @@ mod tests {
         let selected = select_parallel_result(&results, &[e2e4, d2d4]).expect("selected result");
 
         assert_eq!(selected.bestmove, d2d4);
+    }
+
+    #[test]
+    fn quiet_direct_checks_receive_ordering_bonus() {
+        let searcher = Searcher::default();
+        let board = Board::from_fen("4k3/8/8/8/8/8/8/R6K w - - 0 1").expect("valid FEN");
+        let checking = board.parse_move("a1e1").expect("legal checking move");
+        let quiet = board.parse_move("a1a2").expect("legal quiet move");
+        assert!(board.gives_check(checking));
+        assert!(!board.gives_check(quiet));
+
+        let mut scored = searcher.score_moves(&board, &[checking, quiet], Move::NULL, 0);
+        let moves = scored.as_mut_slice();
+        let checking_score = moves
+            .iter()
+            .find(|scored| scored.mv == checking)
+            .expect("checking move scored")
+            .score;
+        let quiet_score = moves
+            .iter()
+            .find(|scored| scored.mv == quiet)
+            .expect("quiet move scored")
+            .score;
+
+        assert!(checking_score >= quiet_score + DIRECT_CHECK_BONUS);
+    }
+
+    #[test]
+    fn quiet_history_uses_low_ply_slots_through_ply_seven() {
+        let mut searcher = Searcher::default();
+        let board = Board::default();
+        let mv = board.parse_move("a2a3").expect("legal quiet move");
+        let from = Square::A2.index();
+        let to = Square::A3.index();
+
+        searcher.low_ply_history[7][from][to] = 800;
+
+        assert_eq!(
+            searcher.quiet_history_score(&board, Color::White, mv, 7),
+            100
+        );
+        assert_eq!(searcher.quiet_history_score(&board, Color::White, mv, 8), 0);
+    }
+
+    #[test]
+    fn quiet_history_updates_only_configured_low_ply_window() {
+        let mut searcher = Searcher::default();
+        let board = Board::default();
+        let in_window = board.parse_move("a2a3").expect("legal quiet move");
+        let outside_window = board.parse_move("h2h3").expect("legal quiet move");
+
+        searcher.update_quiet_history(
+            Color::White,
+            in_window,
+            Piece::Pawn,
+            board.pawn_key(),
+            LOW_PLY_HISTORY_SIZE - 1,
+            400,
+        );
+        searcher.update_quiet_history(
+            Color::White,
+            outside_window,
+            Piece::Pawn,
+            board.pawn_key(),
+            LOW_PLY_HISTORY_SIZE,
+            400,
+        );
+
+        assert!(
+            searcher.low_ply_history[LOW_PLY_HISTORY_SIZE - 1][Square::A2.index()]
+                [Square::A3.index()]
+                > 0
+        );
+        assert_eq!(
+            searcher.low_ply_history[LOW_PLY_HISTORY_SIZE - 1][Square::H2.index()]
+                [Square::H3.index()],
+            0
+        );
     }
 
     #[test]

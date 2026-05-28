@@ -6,6 +6,7 @@ pub const INF_SCORE: i32 = 32_001;
 pub const VALUE_NONE: i32 = 32_002;
 
 const PAWN_TABLE_SIZE: usize = 16_384;
+const EVAL_TABLE_SIZE: usize = 32_768;
 const TOTAL_PHASE: i32 = 24;
 
 const MG_VAL: [i32; 6] = [82, 337, 365, 477, 1025, 0];
@@ -278,15 +279,25 @@ struct PawnEntry {
     attacks: [Bitboard; 2],
 }
 
+#[derive(Copy, Clone, Default)]
+struct EvalEntry {
+    key: u64,
+    halfmove_clock: u8,
+    value: i32,
+    occupied: bool,
+}
+
 #[derive(Clone)]
 pub struct Evaluator {
     pawn_table: Vec<PawnEntry>,
+    eval_table: Vec<EvalEntry>,
 }
 
 impl Default for Evaluator {
     fn default() -> Self {
         Self {
             pawn_table: vec![PawnEntry::default(); PAWN_TABLE_SIZE],
+            eval_table: vec![EvalEntry::default(); EVAL_TABLE_SIZE],
         }
     }
 }
@@ -294,6 +305,7 @@ impl Default for Evaluator {
 impl Evaluator {
     pub fn clear_pawn_table(&mut self) {
         self.pawn_table.fill(PawnEntry::default());
+        self.eval_table.fill(EvalEntry::default());
     }
 
     pub fn evaluate_result(&self, result: GameResult, color: Color, ply: usize) -> i32 {
@@ -308,6 +320,15 @@ impl Evaluator {
     }
 
     pub fn evaluate(&mut self, board: &Board) -> i32 {
+        let eval_slot = board.hash as usize & (EVAL_TABLE_SIZE - 1);
+        let cached = self.eval_table[eval_slot];
+        if cached.occupied
+            && cached.key == board.hash
+            && cached.halfmove_clock == board.halfmove_clock
+        {
+            return cached.value;
+        }
+
         let atk = &*ATTACKS;
         let mut mg = 0;
         let mut eg = 0;
@@ -346,11 +367,18 @@ impl Evaluator {
         score = scale_drawish_endgames(board, score);
         let rule50 = board.halfmove_clock.min(100) as i32;
         score -= score * rule50 / 199;
-        if board.side_to_move() == Color::White {
+        let value = if board.side_to_move() == Color::White {
             score
         } else {
             -score
-        }
+        };
+        self.eval_table[eval_slot] = EvalEntry {
+            key: board.hash,
+            halfmove_clock: board.halfmove_clock,
+            value,
+            occupied: true,
+        };
+        value
     }
 
     fn eval_pawns(

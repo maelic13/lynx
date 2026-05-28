@@ -64,7 +64,6 @@ pub enum GameResult {
 }
 
 /// The chess board.  Square A1 = 0, H8 = 63 (rank-major, little-endian).
-#[derive(Clone)]
 pub struct Board {
     /// `pieces[color * 6 + piece_type]`
     pieces: [Bitboard; 12],
@@ -89,6 +88,30 @@ pub struct Board {
     non_pawn_hash: [u64; 2],
     checkers: Bitboard,
     history: Vec<UnmakeInfo>,
+}
+
+impl Clone for Board {
+    fn clone(&self) -> Self {
+        let mut history = Vec::with_capacity(self.history.capacity().max(128));
+        history.extend_from_slice(&self.history);
+        Self {
+            pieces: self.pieces,
+            occupancy: self.occupancy,
+            all_occ: self.all_occ,
+            mailbox: self.mailbox,
+            side_to_move: self.side_to_move,
+            castling: self.castling,
+            ep_sq: self.ep_sq,
+            halfmove_clock: self.halfmove_clock,
+            fullmove: self.fullmove,
+            hash: self.hash,
+            pawn_hash: self.pawn_hash,
+            minor_hash: self.minor_hash,
+            non_pawn_hash: self.non_pawn_hash,
+            checkers: self.checkers,
+            history,
+        }
+    }
 }
 
 impl Board {

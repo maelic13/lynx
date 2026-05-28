@@ -1,4 +1,4 @@
-use std::{fmt, slice};
+use std::{fmt, mem::MaybeUninit, slice};
 
 use super::piece::Piece;
 use super::square::Square;
@@ -11,9 +11,8 @@ use super::square::Square;
 #[derive(Copy, Clone, PartialEq, Eq, Default, Hash, Debug)]
 pub struct Move(pub u16);
 
-#[derive(Clone)]
 pub struct MoveList {
-    moves: [Move; 256],
+    moves: [MaybeUninit<Move>; 256],
     len: usize,
 }
 
@@ -21,7 +20,7 @@ impl MoveList {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            moves: [Move::NULL; 256],
+            moves: uninit_array(),
             len: 0,
         }
     }
@@ -29,7 +28,7 @@ impl MoveList {
     #[inline(always)]
     pub fn push(&mut self, mv: Move) {
         debug_assert!(self.len < self.moves.len());
-        self.moves[self.len] = mv;
+        self.moves[self.len].write(mv);
         self.len += 1;
     }
 
@@ -50,7 +49,20 @@ impl MoveList {
 
     #[inline(always)]
     pub fn as_slice(&self) -> &[Move] {
-        &self.moves[..self.len]
+        // Only the prefix below `len` is ever exposed and each element is
+        // initialized by `push`.
+        unsafe { slice::from_raw_parts(self.moves.as_ptr().cast::<Move>(), self.len) }
+    }
+}
+
+impl Clone for MoveList {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        let mut cloned = Self::new();
+        for &mv in self.as_slice() {
+            cloned.push(mv);
+        }
+        cloned
     }
 }
 
@@ -69,6 +81,12 @@ impl<'a> IntoIterator for &'a MoveList {
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
     }
+}
+
+#[inline(always)]
+fn uninit_array<T, const N: usize>() -> [MaybeUninit<T>; N] {
+    // An array of `MaybeUninit<T>` is valid without initializing its elements.
+    unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() }
 }
 
 // Move flag constants (upper 4 bits of a Move)

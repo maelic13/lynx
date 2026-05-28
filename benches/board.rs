@@ -2,6 +2,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use lynx::board::{Board, generate_captures, generate_legal_moves, perft};
+use lynx::eval::Evaluator;
 
 const WARMUP: Duration = Duration::from_millis(150);
 const MEASURE: Duration = Duration::from_millis(750);
@@ -50,6 +51,7 @@ fn main() {
     let mut mutable_boards = boards.clone();
     let mut see_boards = boards.clone();
     let mut simulation_boards = boards.clone();
+    let mut evaluator = Evaluator::default();
 
     let results = [
         measure("legal movegen", "moves", || legal_movegen(&boards)),
@@ -58,6 +60,9 @@ fn main() {
         measure("make/unmake", "moves", || make_unmake(&mut mutable_boards)),
         measure("check detection", "positions", || check_detection(&boards)),
         measure("see captures", "captures", || see_captures(&mut see_boards)),
+        measure("evaluation", "positions", || {
+            eval_positions(&boards, &mut evaluator)
+        }),
         measure("game simulation", "moves", || {
             game_simulation(&mut simulation_boards)
         }),
@@ -179,6 +184,16 @@ fn see_captures(boards: &mut [Board]) -> u64 {
         }
     }
     ops
+}
+
+fn eval_positions(boards: &[Board], evaluator: &mut Evaluator) -> u64 {
+    boards
+        .iter()
+        .map(|board| {
+            black_box(evaluator.evaluate(black_box(board)));
+            1
+        })
+        .sum()
 }
 
 fn game_simulation(boards: &mut [Board]) -> u64 {

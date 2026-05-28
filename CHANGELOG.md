@@ -4,8 +4,8 @@ All notable changes to Lynx are documented in this file.
 
 ## [1.4.1] - 2026-05-28
 
-Patch release focused on search hotpath profiling and NPS-oriented technical
-cleanup after the 1.4.0 TT-move safety work.
+Patch release combining the unreleased 1.4.0 TT-move safety work with search
+hotpath cleanup and a small move-ordering update for checking quiet moves.
 
 ### Fixed
 
@@ -24,6 +24,10 @@ cleanup after the 1.4.0 TT-move safety work.
   search results still report exact total nodes by summing each thread result.
 - Skipped duplicate TT capture scoring in the staged move picker after the TT
   move has already been emitted first.
+- Added a direct-check ordering bonus for quiet moves so checking quiets are
+  considered earlier by the move picker without changing legality filtering.
+- Expanded low-ply quiet history from four plies to eight plies for stronger
+  early-root move-ordering feedback.
 
 ### Added
 
@@ -31,11 +35,16 @@ cleanup after the 1.4.0 TT-move safety work.
   move-validation cost is visible in local profiling.
 - Added regression coverage for pseudo-legal pinned moves that must still be
   rejected by the final legal validator.
+- Added regression coverage verifying that quiet direct-check moves receive the
+  intended move-ordering bonus.
+- Added regression coverage for the expanded eight-ply low-ply history window,
+  including the boundary where ply eight is no longer recorded.
 
-## [1.4.0] - 2026-05-28
+## [1.4.0] - 2026-05-28 (not released separately; included in 1.4.1)
 
-Minor release focused on Stockfish-style transposition-table move safety and
-search move ordering.
+Unreleased minor-version work focused on Stockfish-style transposition-table
+move safety and search move ordering. These changes are included in the 1.4.1
+release.
 
 ### Fixed
 

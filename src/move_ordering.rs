@@ -1,10 +1,12 @@
+use std::{mem::MaybeUninit, slice};
+
 use crate::board::{Move, Piece};
 
 pub const HISTORY_MAX: i32 = 16_384;
 pub const CAP_HISTORY_MAX: i32 = 16_384;
 pub const CORR_SIZE: usize = 16_384;
 pub const CONT_SIZE: usize = 6 * 64 * 6 * 64;
-pub const LOW_PLY_HISTORY_SIZE: usize = 4;
+pub const LOW_PLY_HISTORY_SIZE: usize = 8;
 pub const PAWN_HISTORY_SIZE: usize = 4_096;
 pub const PIECE_TO_SIZE: usize = 6 * 64;
 
@@ -13,10 +15,11 @@ pub(crate) struct ScoredMove {
     pub mv: Move,
     pub score: i32,
     pub see: i16,
+    pub quiet_history: i32,
 }
 
 pub(crate) struct ScoredMoveList {
-    moves: [ScoredMove; 256],
+    moves: [MaybeUninit<ScoredMove>; 256],
     len: usize,
 }
 
@@ -24,19 +27,25 @@ impl ScoredMoveList {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            moves: [ScoredMove::default(); 256],
+            moves: uninit_array(),
             len: 0,
         }
     }
 
     #[inline(always)]
     pub fn push(&mut self, mv: Move, score: i32, see: i32) {
+        self.push_with_history(mv, score, see, 0);
+    }
+
+    #[inline(always)]
+    pub fn push_with_history(&mut self, mv: Move, score: i32, see: i32, quiet_history: i32) {
         debug_assert!(self.len < self.moves.len());
-        self.moves[self.len] = ScoredMove {
+        self.moves[self.len].write(ScoredMove {
             mv,
             score,
             see: see.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
-        };
+            quiet_history,
+        });
         self.len += 1;
     }
 
@@ -47,7 +56,8 @@ impl ScoredMoveList {
 
     #[inline(always)]
     pub fn as_mut_slice(&mut self) -> &mut [ScoredMove] {
-        &mut self.moves[..self.len]
+        // Only the initialized prefix is exposed.
+        unsafe { slice::from_raw_parts_mut(self.moves.as_mut_ptr().cast::<ScoredMove>(), self.len) }
     }
 }
 
@@ -59,7 +69,7 @@ pub(crate) struct BadCapture {
 }
 
 pub(crate) struct BadCaptureList {
-    items: [BadCapture; 256],
+    items: [MaybeUninit<BadCapture>; 256],
     len: usize,
 }
 
@@ -67,11 +77,7 @@ impl BadCaptureList {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            items: [BadCapture {
-                attacker: Piece::Pawn,
-                to: 0,
-                captured: None,
-            }; 256],
+            items: uninit_array(),
             len: 0,
         }
     }
@@ -79,17 +85,18 @@ impl BadCaptureList {
     #[inline(always)]
     pub fn push(&mut self, attacker: Piece, to: usize, captured: Option<Piece>) {
         debug_assert!(self.len < self.items.len());
-        self.items[self.len] = BadCapture {
+        self.items[self.len].write(BadCapture {
             attacker,
             to,
             captured,
-        };
+        });
         self.len += 1;
     }
 
     #[inline(always)]
     pub fn as_slice(&self) -> &[BadCapture] {
-        &self.items[..self.len]
+        // Only the initialized prefix is exposed.
+        unsafe { slice::from_raw_parts(self.items.as_ptr().cast::<BadCapture>(), self.len) }
     }
 }
 
@@ -132,4 +139,10 @@ pub(crate) fn piece_to_index(piece: usize, to: usize) -> usize {
 pub(crate) fn pawn_history_index(pawn_key: u64, piece: usize, to: usize) -> usize {
     let slot = pawn_key as usize & (PAWN_HISTORY_SIZE - 1);
     slot * PIECE_TO_SIZE + piece_to_index(piece, to)
+}
+
+#[inline(always)]
+fn uninit_array<T, const N: usize>() -> [MaybeUninit<T>; N] {
+    // An array of `MaybeUninit<T>` is valid without initializing its elements.
+    unsafe { MaybeUninit::<[MaybeUninit<T>; N]>::uninit().assume_init() }
 }
