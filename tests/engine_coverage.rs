@@ -643,7 +643,7 @@ fn search_respects_node_limit() {
 }
 
 #[test]
-fn threaded_search_keeps_node_limit_on_main_search() {
+fn threaded_search_uses_aggregate_node_limit() {
     let mut searcher = Searcher::default();
     let mut options = SearchOptions::default();
     options.limits.depth = 99.0;

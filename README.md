@@ -14,9 +14,9 @@ speaks the UCI protocol.
   a legal en passant capture share the same transposition key
 - Zobrist hashing, transposition table, and pawn evaluation cache
 - Iterative deepening negamax/PVS search with aspiration windows
-- Configurable Lazy SMP-style parallel search with persistent workers and a
-  full-key validated shared transposition table through the UCI `Threads`
-  option
+- Configurable Lazy SMP-style parallel search with persistent workers, shared
+  stop/node/accounting state, weighted helper result selection, and a full-key
+  validated shared transposition table through the UCI `Threads` option
 - Basic UCI `MultiPV` support for analysis output
 - Capture-focused quiescence search with delta pruning, capture futility,
   threshold SEE pruning, and bounded check evasions
@@ -152,7 +152,8 @@ The suite covers:
 - Time-management behavior for fast clocks, `movetime`, side-to-move clocks,
   explicit `movestogo`, and unbounded fixed-depth searches
 - Single-thread determinism and thread-count reconfiguration
-- Threaded search node-limit handling
+- Threaded search node-limit, MultiPV, stop, quit, UCI info accounting, and
+  ponderhit behavior
 - Threshold SEE behavior for captures and promotions
 - Staged move-picker ordering for bad captures after quiet moves
 - Syzygy option parsing, result decoding, root move conversion, root tablebase
@@ -185,6 +186,19 @@ Current documented release: `1.3.4`.
 
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)
+
+Release-preparation checks for `1.3.4`:
+
+```bash
+cargo fmt --check
+cargo check
+cargo test
+cargo test --release
+```
+
+The `1.3.4` build was also smoke-tested against `v1.3.3` with a short
+cutechess regression at `Threads=1` and `Threads=8`; neither run showed an
+obvious strength regression.
 
 Release assets may include standalone executables for Windows, Linux, and
 Apple Silicon macOS. Intel macOS release assets are not published.

@@ -1,8 +1,4 @@
-use std::sync::{
-    Arc, LazyLock,
-    atomic::{AtomicU8, Ordering},
-    mpsc,
-};
+use std::sync::{Arc, LazyLock, atomic::Ordering, mpsc};
 use std::time::Instant;
 
 use crate::board::{Board, Color, GameResult, Move, Piece};
@@ -14,7 +10,7 @@ use crate::move_ordering::{
     update_hist_entry,
 };
 use crate::search_options::{EngineOptions, MAX_THREADS, SearchLimits, SearchOptions};
-use crate::search_threads::{STOP_NONE, STOP_QUIT, STOP_SEARCH, WorkerJob, WorkerPool};
+use crate::search_threads::{STOP_QUIT, STOP_SEARCH, SharedSearchState, WorkerJob, WorkerPool};
 use crate::syzygy::{self, Wdl};
 use crate::time_manager::{RuntimeLimits, compute_runtime_limits};
 use crate::tt::{Bound, TranspositionTable, score_from_tt};
@@ -93,6 +89,7 @@ pub struct Searcher {
     hash_mb: usize,
     worker_pool: WorkerPool,
     evaluator: Evaluator,
+    shared_state: Option<Arc<SharedSearchState>>,
     nodes: u64,
     tb_hits: u64,
     seldepth: usize,
@@ -141,6 +138,7 @@ impl Default for Searcher {
             hash_mb: 64,
             worker_pool: WorkerPool::default(),
             evaluator: Evaluator::default(),
+            shared_state: None,
             nodes: 0,
             tb_hits: 0,
             seldepth: 0,
@@ -277,15 +275,18 @@ impl Searcher {
     ) -> SearchResult {
         self.tt = job.tt;
         self.hash_mb = job.hash_mb;
+        self.shared_state = Some(Arc::clone(&job.shared_state));
         self.root_move_offset = job.root_move_offset;
         self.tt_write_mode = TtWriteMode::Helper;
-        self.search_worker(
+        let result = self.search_worker(
             job.root,
             job.limits,
             job.engine_options,
             job.root_moves.as_ref(),
             poll,
-        )
+        );
+        self.shared_state = None;
+        result
     }
 
     pub fn configure(&mut self, options: &SearchOptions) {
@@ -380,6 +381,7 @@ impl Searcher {
                 self.hash_mb
             );
         }
+        self.shared_state = None;
         self.root_move_offset = 0;
         self.tt_write_mode = TtWriteMode::Main;
         self.reset_search_state(&limits, &engine_options, root.side_to_move(), true, true);
@@ -415,15 +417,8 @@ impl Searcher {
         let root_moves = syzygy_root_moves.as_deref().unwrap_or(root_candidates);
 
         if ALLOW_PARALLEL {
-            let threads = engine_options
-                .threads
-                .clamp(1, MAX_THREADS)
-                .min(root_moves.len().max(1));
-            if threads > 1
-                && engine_options.multi_pv <= 1
-                && limits.nodes == 0
-                && self.limits.depth.min(MAX_DEPTH - 1) >= MIN_PARALLEL_DEPTH
-            {
+            let threads = engine_options.threads.clamp(1, MAX_THREADS);
+            if threads > 1 && self.limits.depth.min(MAX_DEPTH - 1) >= MIN_PARALLEL_DEPTH {
                 return self.search_parallel(
                     board,
                     root_moves,
@@ -504,7 +499,7 @@ impl Searcher {
             self.syzygy_50_move_rule,
             board.has_repeated_position(),
         )?;
-        self.tb_hits += 1;
+        self.record_tb_hit();
 
         let mut tb_moves = Vec::new();
         for probe_move in &probe.moves {
@@ -531,7 +526,7 @@ impl Searcher {
                 .iter()
                 .any(|(tb_move, rank, _)| *tb_move == preferred_move && *rank == best_rank)
         {
-            self.tb_hits += 1;
+            self.record_tb_hit();
             return Some(vec![preferred_move]);
         }
 
@@ -822,8 +817,8 @@ impl Searcher {
         poll: &mut P,
     ) -> SearchResult {
         self.tt.make_shared();
-        let stop_state = Arc::new(AtomicU8::new(STOP_NONE));
-        let helper_count = threads.min(root_moves.len()).saturating_sub(1);
+        let shared_state = Arc::new(SharedSearchState::new(self.tb_hits));
+        let helper_count = threads.saturating_sub(1);
         let root_len = root_moves.len();
         let mut worker_engine_options = engine_options;
         worker_engine_options.threads = 1;
@@ -833,7 +828,11 @@ impl Searcher {
         let (result_tx, result_rx) = mpsc::channel();
         let mut launched_helpers = 0usize;
         for index in 0..helper_count {
-            let offset = ((index + 1) * root_len / threads).max(1) % root_len;
+            let offset = if threads <= root_len {
+                ((index + 1) * root_len / threads).max(1) % root_len
+            } else {
+                (index + 1) % root_len
+            };
             let job = WorkerJob {
                 root: root.clone(),
                 root_moves: Arc::clone(&root_moves_shared),
@@ -842,7 +841,7 @@ impl Searcher {
                 tt: self.tt.clone(),
                 hash_mb: self.hash_mb,
                 root_move_offset: offset,
-                stop_state: Arc::clone(&stop_state),
+                shared_state: Arc::clone(&shared_state),
                 result_tx: result_tx.clone(),
             };
             if self.worker_pool.send_search(index, job) {
@@ -852,26 +851,28 @@ impl Searcher {
         drop(result_tx);
 
         self.root_move_offset = 0;
-        let mut main_poll = || match stop_state.load(Ordering::Relaxed) {
+        self.shared_state = Some(Arc::clone(&shared_state));
+        let mut main_poll = || match shared_state.stop_state.load(Ordering::Relaxed) {
             STOP_QUIT => SearchEvent::Quit,
             STOP_SEARCH => SearchEvent::Stop,
             _ => match poll() {
                 SearchEvent::Quit => {
-                    stop_state.store(STOP_QUIT, Ordering::Relaxed);
+                    shared_state.request_quit();
                     SearchEvent::Quit
                 }
                 SearchEvent::Stop => {
-                    stop_state.store(STOP_SEARCH, Ordering::Relaxed);
+                    shared_state.request_stop();
                     SearchEvent::Stop
                 }
-                SearchEvent::PonderHit => SearchEvent::PonderHit,
+                SearchEvent::PonderHit => {
+                    shared_state.ponderhit.store(true, Ordering::Relaxed);
+                    SearchEvent::PonderHit
+                }
                 SearchEvent::None => SearchEvent::None,
             },
         };
         let main_result = self.search_root(root, root_moves, emit_info, &mut main_poll);
-        stop_state
-            .compare_exchange(STOP_NONE, STOP_SEARCH, Ordering::Relaxed, Ordering::Relaxed)
-            .ok();
+        shared_state.request_stop();
 
         let mut helper_results = Vec::with_capacity(launched_helpers + 1);
         helper_results.push(main_result);
@@ -882,14 +883,12 @@ impl Searcher {
         }
         self.root_move_offset = 0;
 
-        let mut total_nodes = 0u64;
-        let mut total_tb_hits = 0u64;
-        let mut quit = false;
-        for result in &helper_results {
-            total_nodes = total_nodes.saturating_add(result.nodes);
-            total_tb_hits = total_tb_hits.saturating_add(result.tb_hits);
-            quit |= result.exit == SearchExit::Quit;
-        }
+        let total_nodes = shared_state.nodes.load(Ordering::Relaxed);
+        let total_tb_hits = shared_state.tb_hits.load(Ordering::Relaxed);
+        let quit = shared_state.stop_state.load(Ordering::Relaxed) == STOP_QUIT
+            || helper_results
+                .iter()
+                .any(|result| result.exit == SearchExit::Quit);
         let mut best =
             select_parallel_result(&helper_results, root_moves).unwrap_or(SearchResult {
                 bestmove: root_moves[0],
@@ -915,6 +914,7 @@ impl Searcher {
         } else {
             SearchExit::Stop
         };
+        self.shared_state = None;
         best
     }
 
@@ -2072,7 +2072,7 @@ impl Searcher {
             return None;
         }
         let wdl = syzygy::probe_wdl(board, self.syzygy_50_move_rule)?;
-        self.tb_hits += 1;
+        self.record_tb_hit();
         Some(self.score_from_syzygy_wdl(wdl, ply))
     }
 
@@ -2164,9 +2164,26 @@ impl Searcher {
     }
 
     fn check_stop<P: FnMut() -> SearchEvent + ?Sized>(&mut self, poll: &mut P) -> bool {
-        self.nodes += 1;
-        if self.limits.nodes > 0 && self.nodes >= self.limits.nodes {
+        let total_nodes = self.record_node();
+        if let Some(shared_state) = &self.shared_state {
+            match shared_state.stop_state.load(Ordering::Relaxed) {
+                STOP_QUIT => {
+                    self.quit = true;
+                    self.stopped = true;
+                    return true;
+                }
+                STOP_SEARCH => {
+                    self.stopped = true;
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        if self.limits.nodes > 0 && total_nodes >= self.limits.nodes {
             self.stopped = true;
+            if let Some(shared_state) = &self.shared_state {
+                shared_state.request_stop();
+            }
             return true;
         }
         if self.nodes & 2047 == 0 {
@@ -2181,6 +2198,9 @@ impl Searcher {
                 SearchEvent::PonderHit => {
                     self.pondering = false;
                     self.ponderhit = true;
+                    if let Some(shared_state) = &self.shared_state {
+                        shared_state.ponderhit.store(true, Ordering::Relaxed);
+                    }
                 }
                 SearchEvent::None => {}
             }
@@ -2189,6 +2209,38 @@ impl Searcher {
             }
         }
         self.stopped
+    }
+
+    fn record_node(&mut self) -> u64 {
+        self.nodes += 1;
+        if let Some(shared_state) = &self.shared_state {
+            shared_state.nodes.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            self.nodes
+        }
+    }
+
+    fn record_tb_hit(&mut self) {
+        self.tb_hits += 1;
+        if let Some(shared_state) = &self.shared_state {
+            shared_state.tb_hits.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn reported_nodes(&self) -> u64 {
+        self.shared_state
+            .as_ref()
+            .map_or(self.nodes, |shared_state| {
+                shared_state.nodes.load(Ordering::Relaxed)
+            })
+    }
+
+    fn reported_tb_hits(&self) -> u64 {
+        self.shared_state
+            .as_ref()
+            .map_or(self.tb_hits, |shared_state| {
+                shared_state.tb_hits.load(Ordering::Relaxed)
+            })
     }
 
     fn elapsed_ms(&self) -> f64 {
@@ -2206,10 +2258,12 @@ impl Searcher {
 
     fn send_info_line(&self, depth: usize, score: i32, multipv: Option<usize>, pv: &[Move]) {
         let elapsed_ms = self.start.elapsed().as_millis();
+        let nodes = self.reported_nodes();
+        let tb_hits = self.reported_tb_hits();
         let nps = if elapsed_ms > 0 {
-            self.nodes as u128 * 1000 / elapsed_ms
+            nodes as u128 * 1000 / elapsed_ms
         } else {
-            self.nodes as u128
+            nodes as u128
         };
         let pv = pv
             .iter()
@@ -2223,10 +2277,10 @@ impl Searcher {
                 self.seldepth,
                 multipv,
                 format_score(score),
-                self.nodes,
+                nodes,
                 nps,
                 self.hashfull(),
-                self.tb_hits,
+                tb_hits,
                 elapsed_ms,
                 pv
             );
@@ -2236,10 +2290,10 @@ impl Searcher {
                 depth,
                 self.seldepth,
                 format_score(score),
-                self.nodes,
+                nodes,
                 nps,
                 self.hashfull(),
-                self.tb_hits,
+                tb_hits,
                 elapsed_ms,
                 pv
             );
@@ -2296,47 +2350,73 @@ fn move_gives_check(board: &Board, mv: Move, cache: &mut Option<bool>) -> bool {
 }
 
 fn select_parallel_result(results: &[SearchResult], root_moves: &[Move]) -> Option<SearchResult> {
-    let max_depth = results
+    let root_results = results
         .iter()
-        .filter(|result| is_root_result(result, root_moves))
-        .map(|result| result.depth)
-        .max()?;
+        .enumerate()
+        .filter(|(_, result)| is_root_result(result, root_moves))
+        .collect::<Vec<_>>();
+    let min_score = root_results.iter().map(|(_, result)| result.score).min()?;
 
-    let mut votes: Vec<(Move, usize, bool, i32, usize)> = Vec::new();
-    for (index, result) in results.iter().enumerate() {
-        if result.depth != max_depth || !is_root_result(result, root_moves) {
-            continue;
-        }
-        if let Some(vote) = votes
-            .iter_mut()
-            .find(|(mv, _, _, _, _)| *mv == result.bestmove)
-        {
-            vote.1 += 1;
-            vote.2 |= index == 0;
-            if result.score > vote.3 {
-                vote.3 = result.score;
-                vote.4 = index;
-            }
+    let mut votes: Vec<(Move, i64)> = Vec::new();
+    for (_, result) in &root_results {
+        let vote_value = parallel_vote_value(result, min_score);
+        if let Some(vote) = votes.iter_mut().find(|(mv, _)| *mv == result.bestmove) {
+            vote.1 += vote_value;
         } else {
-            votes.push((result.bestmove, 1, index == 0, result.score, index));
+            votes.push((result.bestmove, vote_value));
         }
     }
 
-    votes
+    root_results
         .into_iter()
-        .max_by_key(|(_, count, main_vote, score, _)| (*count, *main_vote, *score))
-        .and_then(|(_, _, _, _, index)| results.get(index).cloned())
-        .or_else(|| {
-            results
-                .iter()
-                .filter(|result| is_root_result(result, root_moves))
-                .max_by_key(|result| (result.depth, result.score))
-                .cloned()
+        .max_by(|(left_index, left), (right_index, right)| {
+            let left_vote = vote_for_move(&votes, left.bestmove);
+            let right_vote = vote_for_move(&votes, right.bestmove);
+            parallel_result_key(left, left_vote, *left_index == 0).cmp(&parallel_result_key(
+                right,
+                right_vote,
+                *right_index == 0,
+            ))
         })
+        .map(|(_, result)| result.clone())
 }
 
 fn is_root_result(result: &SearchResult, root_moves: &[Move]) -> bool {
     result.depth > 0 && root_moves.iter().any(|&mv| mv == result.bestmove)
+}
+
+fn parallel_vote_value(result: &SearchResult, min_score: i32) -> i64 {
+    let score_weight = (result.score as i64 - min_score as i64 + 14).max(1);
+    score_weight * result.depth.max(1) as i64
+}
+
+fn vote_for_move(votes: &[(Move, i64)], mv: Move) -> i64 {
+    votes
+        .iter()
+        .find_map(|(vote_move, vote)| (*vote_move == mv).then_some(*vote))
+        .unwrap_or(0)
+}
+
+fn parallel_result_key(
+    result: &SearchResult,
+    vote: i64,
+    main_thread: bool,
+) -> (i32, i64, bool, usize, i32, bool) {
+    let decisive_rank = if result.score >= TB_WIN_SCORE {
+        2
+    } else if result.score <= -TB_WIN_SCORE {
+        0
+    } else {
+        1
+    };
+    (
+        decisive_rank,
+        vote,
+        !result.pondermove.is_null(),
+        result.depth,
+        result.score,
+        main_thread,
+    )
 }
 
 fn format_score(score: i32) -> String {
@@ -2406,6 +2486,37 @@ mod tests {
     }
 
     #[test]
+    fn parallel_result_selection_uses_weighted_helper_votes() {
+        let e2e4 = Move::from_uci("e2e4").expect("valid move");
+        let d2d4 = Move::from_uci("d2d4").expect("valid move");
+        let g1f3 = Move::from_uci("g1f3").expect("valid move");
+        let results = vec![
+            test_search_result(e2e4, 20, 5),
+            test_search_result(d2d4, 18, 5),
+            test_search_result(d2d4, 16, 5),
+        ];
+
+        let selected =
+            select_parallel_result(&results, &[e2e4, d2d4, g1f3]).expect("selected result");
+
+        assert_eq!(selected.bestmove, d2d4);
+    }
+
+    #[test]
+    fn parallel_result_selection_prefers_decisive_win() {
+        let e2e4 = Move::from_uci("e2e4").expect("valid move");
+        let d2d4 = Move::from_uci("d2d4").expect("valid move");
+        let results = vec![
+            test_search_result(e2e4, 900, 12),
+            test_search_result(d2d4, TB_WIN_SCORE, 4),
+        ];
+
+        let selected = select_parallel_result(&results, &[e2e4, d2d4]).expect("selected result");
+
+        assert_eq!(selected.bestmove, d2d4);
+    }
+
+    #[test]
     fn staged_picker_delays_bad_captures_until_after_quiets() {
         let searcher = Searcher::default();
         let mut board = Board::from_fen("4k3/8/4p3/3p4/8/2N5/8/4K3 w - - 0 1").expect("valid FEN");
@@ -2441,5 +2552,19 @@ mod tests {
             losing_capture_seen,
             "test position must include the losing capture"
         );
+    }
+
+    fn test_search_result(bestmove: Move, score: i32, depth: usize) -> SearchResult {
+        SearchResult {
+            bestmove,
+            pondermove: Move::NULL,
+            score,
+            depth,
+            nodes: 0,
+            tb_hits: 0,
+            elapsed_ms: 0,
+            exit: SearchExit::Stop,
+            ponderhit: false,
+        }
     }
 }

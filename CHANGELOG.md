@@ -4,7 +4,8 @@ All notable changes to Lynx are documented in this file.
 
 ## [1.3.4] - 2026-05-28
 
-Patch release focused on completing Stockfish-compatible UCI ponder behavior.
+Patch release focused on completing Stockfish-compatible UCI ponder behavior
+and Lazy SMP threaded search semantics.
 
 ### Fixed
 
@@ -12,6 +13,17 @@ Patch release focused on completing Stockfish-compatible UCI ponder behavior.
   preserves elapsed thinking time instead of restarting the search clock. This
   matches Stockfish-style behavior and prevents tournament GUIs from allowing a
   ponder hit to consume an extra full move budget.
+- Fixed threaded search accounting so UCI `nodes`, `tbhits`, stop, quit, and
+  ponderhit state are shared across the main and helper threads rather than
+  being reported or limited from the main thread alone.
+
+### Changed
+
+- Enabled threaded search for node-limited and MultiPV searches, with helpers
+  using the same root move set and aggregate stop condition as the main thread.
+- Reworked parallel best-result selection to use weighted votes from helper
+  searches, with decisive scores, PV availability, depth, score, and the main
+  thread used as tie-breakers.
 
 ### Added
 
@@ -19,6 +31,13 @@ Patch release focused on completing Stockfish-compatible UCI ponder behavior.
   searches waiting for `ponderhit` or `stop` before emitting `bestmove`.
 - Added regression coverage verifying that `ponderhit` after an already-spent
   `movetime` returns `bestmove` promptly rather than restarting the timer.
+- Added UCI process regression tests for threaded `go nodes`, threaded
+  `go infinite` plus `stop`, and threaded `go ponder` plus `ponderhit`.
+- Added engine-level coverage for threaded aggregate node limits and threaded
+  MultiPV legal root results.
+- Documented release-preparation checks for `1.3.4`, including the release
+  test suite and a short cutechess regression against `v1.3.3` at one and
+  eight search threads.
 
 ## [1.3.3] - 2026-05-28
 

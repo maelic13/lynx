@@ -67,6 +67,12 @@ impl UciSession {
     }
 
     fn expect_line_containing(&self, needle: &str, timeout: Duration) -> String {
+        self.collect_until_line_containing(needle, timeout)
+            .pop()
+            .expect("matching line should be present")
+    }
+
+    fn collect_until_line_containing(&self, needle: &str, timeout: Duration) -> Vec<String> {
         let deadline = Instant::now() + timeout;
         let mut seen = Vec::new();
         loop {
@@ -75,7 +81,10 @@ impl UciSession {
                 panic!("timed out waiting for `{needle}`; seen: {seen:?}");
             }
             match self.stdout_rx.recv_timeout(remaining) {
-                Ok(line) if line.contains(needle) => return line,
+                Ok(line) if line.contains(needle) => {
+                    seen.push(line);
+                    return seen;
+                }
                 Ok(line) => seen.push(line),
                 Err(err) => panic!("timed out waiting for `{needle}` ({err}); seen: {seen:?}"),
             }
@@ -185,6 +194,69 @@ fn ponderhit_after_spent_movetime_does_not_restart_search_clock() {
 }
 
 #[test]
+fn threaded_go_nodes_returns_bestmove_and_reports_nodes() {
+    let mut session = UciSession::start();
+    session.send("uci");
+    session.expect_line_containing("uciok", Duration::from_secs(15));
+    session.send("setoption name Threads value 4");
+    session.send("isready");
+    session.expect_line_containing("readyok", Duration::from_secs(5));
+    session.send("position startpos");
+    session.send("go nodes 4096");
+
+    let lines = session.collect_until_line_containing("bestmove", Duration::from_secs(5));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("info depth")
+                && parse_uci_u64_field(line, "nodes").is_some()),
+        "threaded node search should emit at least one info line with nodes: {lines:?}"
+    );
+    assert!(
+        lines
+            .last()
+            .is_some_and(|line| line.starts_with("bestmove ")),
+        "search should finish with bestmove: {lines:?}"
+    );
+    session.quit();
+}
+
+#[test]
+fn threaded_infinite_search_stops_cleanly() {
+    let mut session = UciSession::start();
+    session.send("uci");
+    session.expect_line_containing("uciok", Duration::from_secs(15));
+    session.send("setoption name Threads value 4");
+    session.send("isready");
+    session.expect_line_containing("readyok", Duration::from_secs(5));
+    session.send("position startpos");
+    session.send("go infinite");
+
+    session.expect_line_containing("info depth 1", Duration::from_secs(5));
+    session.send("stop");
+    session.expect_line_containing("bestmove", Duration::from_secs(5));
+    session.quit();
+}
+
+#[test]
+fn threaded_ponderhit_after_spent_movetime_does_not_restart_search_clock() {
+    let mut session = UciSession::start();
+    session.send("uci");
+    session.expect_line_containing("uciok", Duration::from_secs(15));
+    session.send("setoption name Threads value 4");
+    session.send("isready");
+    session.expect_line_containing("readyok", Duration::from_secs(5));
+    session.send("position startpos moves e2e4");
+    session.send("go ponder movetime 1000");
+
+    thread::sleep(Duration::from_millis(1300));
+    session.send("ponderhit");
+
+    session.expect_line_containing("bestmove", Duration::from_millis(750));
+    session.quit();
+}
+
+#[test]
 fn unknown_command_and_option_print_explicit_diagnostics() {
     let output = run_lynx("setoption name Not A Real Option value 1\nunknownthing\nquit\n");
 
@@ -222,4 +294,14 @@ fn invalid_position_fen_is_a_critical_exit() {
     assert!(out.contains(
         "info string CRITICAL ERROR: Command `position fen invalid` failed. Reason: Invalid FEN."
     ));
+}
+
+fn parse_uci_u64_field(line: &str, field: &str) -> Option<u64> {
+    let mut parts = line.split_whitespace();
+    while let Some(part) = parts.next() {
+        if part == field {
+            return parts.next().and_then(|value| value.parse().ok());
+        }
+    }
+    None
 }

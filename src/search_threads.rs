@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
     mpsc::{self, Sender},
 };
 use std::thread::{self, JoinHandle};
@@ -14,6 +14,36 @@ pub(crate) const STOP_NONE: u8 = 0;
 pub(crate) const STOP_SEARCH: u8 = 1;
 pub(crate) const STOP_QUIT: u8 = 2;
 
+pub(crate) struct SharedSearchState {
+    pub stop_state: AtomicU8,
+    pub ponderhit: AtomicBool,
+    pub nodes: AtomicU64,
+    pub tb_hits: AtomicU64,
+}
+
+impl SharedSearchState {
+    pub(crate) fn new(initial_tb_hits: u64) -> Self {
+        Self {
+            stop_state: AtomicU8::new(STOP_NONE),
+            ponderhit: AtomicBool::new(false),
+            nodes: AtomicU64::new(0),
+            tb_hits: AtomicU64::new(initial_tb_hits),
+        }
+    }
+
+    pub(crate) fn request_stop(&self) {
+        let _ = self
+            .stop_state
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |state| {
+                (state != STOP_QUIT).then_some(STOP_SEARCH)
+            });
+    }
+
+    pub(crate) fn request_quit(&self) {
+        self.stop_state.store(STOP_QUIT, Ordering::Relaxed);
+    }
+}
+
 pub(crate) struct WorkerJob {
     pub root: Board,
     pub root_moves: Arc<[Move]>,
@@ -22,7 +52,7 @@ pub(crate) struct WorkerJob {
     pub tt: TranspositionTable,
     pub hash_mb: usize,
     pub root_move_offset: usize,
-    pub stop_state: Arc<AtomicU8>,
+    pub shared_state: Arc<SharedSearchState>,
     pub result_tx: Sender<SearchResult>,
 }
 
@@ -95,12 +125,16 @@ fn spawn_search_worker(index: usize) -> Option<SearchWorkerHandle> {
                 match message {
                     WorkerMessage::Search(job) => {
                         let result_tx = job.result_tx.clone();
-                        let stop_state = Arc::clone(&job.stop_state);
-                        let mut helper_poll = || match stop_state.load(Ordering::Relaxed) {
-                            STOP_QUIT => SearchEvent::Quit,
-                            STOP_SEARCH => SearchEvent::Stop,
-                            _ => SearchEvent::None,
-                        };
+                        let shared_state = Arc::clone(&job.shared_state);
+                        let mut helper_poll =
+                            || match shared_state.stop_state.load(Ordering::Relaxed) {
+                                STOP_QUIT => SearchEvent::Quit,
+                                STOP_SEARCH => SearchEvent::Stop,
+                                _ if shared_state.ponderhit.load(Ordering::Relaxed) => {
+                                    SearchEvent::PonderHit
+                                }
+                                _ => SearchEvent::None,
+                            };
                         let result = worker.run_worker_job(job, &mut helper_poll);
                         let _ = result_tx.send(result);
                     }
@@ -114,4 +148,28 @@ fn spawn_search_worker(index: usize) -> Option<SearchWorkerHandle> {
         sender,
         handle: Some(handle),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_stop_request_sets_search_stop() {
+        let state = SharedSearchState::new(0);
+
+        state.request_stop();
+
+        assert_eq!(state.stop_state.load(Ordering::Relaxed), STOP_SEARCH);
+    }
+
+    #[test]
+    fn shared_stop_request_does_not_overwrite_quit() {
+        let state = SharedSearchState::new(0);
+
+        state.request_quit();
+        state.request_stop();
+
+        assert_eq!(state.stop_state.load(Ordering::Relaxed), STOP_QUIT);
+    }
 }
