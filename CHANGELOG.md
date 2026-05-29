@@ -2,6 +2,23 @@
 
 All notable changes to Lynx are documented in this file.
 
+## [1.4.3] - 2026-05-29
+
+Patch release focused on a small retained search-strength update and release
+build polish after the 1.4.2 asset changes.
+
+### Changed
+
+- Raised the ProbCut margin from `beta + 160` to `beta + 180`.
+- Relaxed late-move pruning thresholds so deeper late quiets are pruned less
+  aggressively.
+- Changed capture move ordering to use full SEE values for profitable captures
+  instead of only threshold SEE.
+- Renamed PGO release assets to include a `-pgo` suffix before the executable
+  extension so PGO and non-PGO builds can coexist in `target/dist`.
+- Kept PGO training on the built-in `bench` workload after a Lynx-specific EPD
+  training set tested slower than bench-only PGO on the final 1.4.3 code.
+
 ## [1.4.2] - 2026-05-29
 
 Release focused on CPU-specific build assets, PGO release builds, and removing

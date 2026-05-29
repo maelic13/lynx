@@ -1049,7 +1049,7 @@ impl Searcher {
             }
 
             if depth >= 4 {
-                let probcut_beta = beta + 160;
+                let probcut_beta = beta + 180;
                 let captures = board.generate_legal_captures();
                 let mut scored = self.score_tactical_moves(board, captures.as_slice(), tt_move);
                 for index in 0..scored.len().min(8) {
@@ -1617,13 +1617,13 @@ impl Searcher {
             } else if mv.is_capture() {
                 let attacker = board.moving_piece(mv);
                 let victim = board.captured_piece(mv).unwrap_or(Piece::Pawn);
+                see = board.see(mv);
                 let hist =
                     self.cap_history[attacker as usize][mv.to_sq().index()][victim as usize] as i32;
-                if board.see_ge(mv, 0) {
-                    20_000_000 + 16 * piece_value(victim) - piece_value(attacker) + hist
+                if see >= 0 {
+                    20_000_000 + 32 * see + 10 * piece_value(victim) - piece_value(attacker) + hist
                 } else {
-                    see = -1;
-                    -2_000_000 + 16 * piece_value(victim) - piece_value(attacker) + hist
+                    -2_000_000 + see + hist
                 }
             } else if mv.is_promo() {
                 18_000_000 + piece_value(mv.promo_piece())
@@ -2300,7 +2300,7 @@ fn lmr_reduction(depth: i32, move_index: usize) -> i32 {
 }
 
 fn late_move_prune_count(depth: i32, improving: bool) -> usize {
-    let base = 3 + depth * depth / 2;
+    let base = 4 + 2 * depth * depth / 3;
     if improving {
         (base + depth) as usize
     } else {

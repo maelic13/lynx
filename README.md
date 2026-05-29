@@ -143,7 +143,9 @@ cargo xtask build --arch pext --pgo
 
 PGO builds first create an instrumented engine, train it with the built-in
 `bench` command, merge the generated LLVM profile, and rebuild the optimized
-binary. The helper installs the Rust target with `rustup target add` when
+binary. PGO assets add `-pgo` before the executable suffix, so they do not
+overwrite non-PGO builds. Use `--bench-depth <n>` to adjust the training
+workload. The helper installs the Rust target with `rustup target add` when
 `rustup` is available. For PGO it also looks for `llvm-profdata` and attempts
 `rustup component add llvm-tools-preview` if the tool is missing.
 
@@ -215,30 +217,31 @@ Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
 ## Releases
 
-Current documented release: `1.4.2`.
+Current documented release: `1.4.3`.
 
-`1.4.2` adds the BMI2/PEXT x86-64 release asset, cross-platform `xtask`
-release builds, optional PGO asset builds, and removes the incomplete UCI
-`MultiPV` path. The single-PV search and handcrafted evaluation behavior remain
-aligned with `1.4.1`.
+`1.4.3` keeps the 1.4.2 release-asset set and adds a small retained search
+update: a wider ProbCut margin, less aggressive late-move pruning, and SEE-based
+capture ordering for profitable captures. PGO assets now include a `-pgo` suffix
+so they do not overwrite non-PGO builds in `target/dist`.
 
 - [Latest release](https://github.com/maelic13/lynx/releases/latest)
 - [All releases](https://github.com/maelic13/lynx/releases)
 
-Release-preparation checks for `1.4.2`:
+Release-preparation checks for `1.4.3`:
 
 ```bash
 cargo fmt --check
-cargo check
+cargo check --release
 cargo test --release
-cargo xtask build --arch pext --target x86_64-pc-windows-msvc
+cargo xtask build --arch avx2 --target x86_64-pc-windows-msvc
+cargo xtask build --arch avx2 --target x86_64-pc-windows-msvc --pgo
 ```
 
-The `1.4.2` release-preparation work was also checked with PEXT-specific
-release tests, start-position perft, internal `bench 13`, PGO/non-PGO speed
-comparisons, and short Cutechess smoke matches. On the local test machine, PGO
-improved bench NPS by about 4-6% depending on asset, and PEXT PGO was the
-fastest tested Lynx build.
+The `1.4.3` release-preparation work was also checked with internal `bench 13`,
+PGO/non-PGO speed comparisons, and Cutechess regression matches against the
+1.4.2 development baseline and Basilisk 1.4.9. Bench-only PGO remained faster
+than the tested Lynx-specific EPD PGO profile on the final 1.4.3 code, so the
+release build helper keeps bench-only PGO training.
 
 Release assets may include standalone executables for Windows, Linux, and
 Apple Silicon macOS. Intel macOS release assets are not published.

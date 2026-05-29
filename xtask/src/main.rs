@@ -1,7 +1,7 @@
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -46,6 +46,7 @@ fn run() -> Result<()> {
             &binary_path(&target_dir, &config.target),
             config.arch,
             &config.target,
+            false,
         )
     }
 }
@@ -258,6 +259,7 @@ fn build_with_pgo(config: &Config) -> Result<()> {
         &binary_path(&use_target_dir, &config.target),
         config.arch,
         &config.target,
+        true,
     )
 }
 
@@ -273,7 +275,7 @@ fn cargo_build(
         override_flags.to_vec()
     };
 
-    println!(
+    println_flush(format_args!(
         "Building Lynx {} for {}{}",
         asset_arch_name(arch),
         target,
@@ -282,7 +284,7 @@ fn cargo_build(
         } else {
             " with PGO flags"
         }
-    );
+    ));
 
     let status = Command::new("cargo")
         .arg("build")
@@ -304,7 +306,9 @@ fn cargo_build(
 }
 
 fn run_training_bench(binary: &Path, raw_dir: &Path, depth: u16) -> Result<()> {
-    println!("Training PGO profile with internal bench depth {depth}");
+    println_flush(format_args!(
+        "Training PGO profile with internal bench depth {depth}"
+    ));
     let profile_pattern = raw_dir.join("lynx-%p-%m.profraw");
     let mut child = Command::new(binary)
         .env("LLVM_PROFILE_FILE", &profile_pattern)
@@ -333,7 +337,7 @@ fn run_training_bench(binary: &Path, raw_dir: &Path, depth: u16) -> Result<()> {
     let mut saw_summary = false;
     for line in reader.lines() {
         let line = line.map_err(|err| format!("failed reading engine output: {err}"))?;
-        println!("{line}");
+        println_flush(format_args!("{line}"));
         if line.starts_with("Nodes/second") {
             saw_summary = true;
             break;
@@ -375,7 +379,7 @@ fn merge_profiles(llvm_profdata: &Path, raw_dir: &Path, profdata: &Path) -> Resu
         ));
     }
 
-    println!("Merging {} profile file(s)", inputs.len());
+    println_flush(format_args!("Merging {} profile file(s)", inputs.len()));
     let status = Command::new(llvm_profdata)
         .arg("merge")
         .arg("-output")
@@ -426,7 +430,9 @@ fn ensure_llvm_profdata() -> Result<PathBuf> {
         );
     }
 
-    println!("Installing llvm-tools-preview for PGO support");
+    println_flush(format_args!(
+        "Installing llvm-tools-preview for PGO support"
+    ));
     let status = Command::new("rustup")
         .arg("component")
         .arg("add")
@@ -520,7 +526,7 @@ fn binary_path(target_dir: &Path, target: &str) -> PathBuf {
         .join(format!("lynx{}", exe_suffix(target)))
 }
 
-fn copy_dist_binary(binary: &Path, arch: Arch, target: &str) -> Result<()> {
+fn copy_dist_binary(binary: &Path, arch: Arch, target: &str, pgo: bool) -> Result<()> {
     if !binary.exists() {
         return Err(format!(
             "expected binary `{}` does not exist",
@@ -530,7 +536,7 @@ fn copy_dist_binary(binary: &Path, arch: Arch, target: &str) -> Result<()> {
     let dist = PathBuf::from("target").join("dist");
     fs::create_dir_all(&dist)
         .map_err(|err| format!("failed to create `{}`: {err}", dist.display()))?;
-    let asset = dist.join(asset_name(arch, target)?);
+    let asset = dist.join(asset_name(arch, target, pgo)?);
     fs::copy(binary, &asset).map_err(|err| {
         format!(
             "failed to copy `{}` to `{}`: {err}",
@@ -538,16 +544,23 @@ fn copy_dist_binary(binary: &Path, arch: Arch, target: &str) -> Result<()> {
             asset.display()
         )
     })?;
-    println!("Built {}", asset.display());
+    println_flush(format_args!("Built {}", asset.display()));
     Ok(())
 }
 
-fn asset_name(arch: Arch, target: &str) -> Result<String> {
+fn println_flush(args: std::fmt::Arguments<'_>) {
+    println!("{args}");
+    io::stdout().flush().expect("stdout flush failed");
+}
+
+fn asset_name(arch: Arch, target: &str, pgo: bool) -> Result<String> {
+    let pgo_suffix = if pgo { "-pgo" } else { "" };
     Ok(format!(
-        "lynx-v{}-{}-{}{}",
+        "lynx-v{}-{}-{}{}{}",
         package_version()?,
         os_name(target),
         asset_arch_name(arch),
+        pgo_suffix,
         exe_suffix(target)
     ))
 }
