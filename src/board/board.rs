@@ -31,6 +31,8 @@ struct UnmakeInfo {
     fullmove: u16,
     hash: u64,
     checkers: Bitboard,
+    piece_threats: [Bitboard; 6],
+    all_threats: Bitboard,
 }
 
 const NO_PIECE: u8 = 255;
@@ -87,6 +89,8 @@ pub struct Board {
     minor_hash: u64,
     non_pawn_hash: [u64; 2],
     checkers: Bitboard,
+    piece_threats: [Bitboard; 6],
+    all_threats: Bitboard,
     history: Vec<UnmakeInfo>,
 }
 
@@ -109,6 +113,8 @@ impl Clone for Board {
             minor_hash: self.minor_hash,
             non_pawn_hash: self.non_pawn_hash,
             checkers: self.checkers,
+            piece_threats: self.piece_threats,
+            all_threats: self.all_threats,
             history,
         }
     }
@@ -139,6 +145,8 @@ impl Board {
             minor_hash: 0,
             non_pawn_hash: [0; 2],
             checkers: Bitboard::EMPTY,
+            piece_threats: [Bitboard::EMPTY; 6],
+            all_threats: Bitboard::EMPTY,
             history: Vec::with_capacity(128),
         };
 
@@ -258,6 +266,7 @@ impl Board {
             board.set_legal_ep_square(ep_sq)?;
         }
         board.checkers = board.calculate_checkers();
+        board.update_threats();
         Ok(board)
     }
 
@@ -378,6 +387,16 @@ impl Board {
     #[inline(always)]
     pub fn occupied(&self) -> Bitboard {
         self.all_occ
+    }
+
+    #[inline(always)]
+    pub fn all_threats(&self) -> Bitboard {
+        self.all_threats
+    }
+
+    #[inline(always)]
+    pub fn piece_threats(&self, piece: Piece) -> Bitboard {
+        self.piece_threats[piece as usize]
     }
 
     #[inline(always)]
@@ -898,7 +917,7 @@ impl Board {
 
         loop {
             side = !side;
-            let mut attackers = self.attackers_to_color(target, occ, side);
+            let mut attackers = self.legal_see_attackers(target, occ, side);
             if attackers.is_empty() {
                 break;
             }
@@ -913,7 +932,7 @@ impl Board {
 
             attacker_piece = piece;
             occ ^= Bitboard::from(sq);
-            attackers = self.attackers_to_color(target, occ, !side);
+            attackers = self.legal_see_attackers(target, occ, !side);
             if (attackers & self.pieces(!side, Piece::King)).any() {
                 break;
             }
@@ -976,7 +995,7 @@ impl Board {
         let mut result = true;
         loop {
             side = !side;
-            let attackers = self.attackers_to_color(target, occ, side);
+            let attackers = self.legal_see_attackers(target, occ, side);
             if attackers.is_empty() {
                 break;
             }
@@ -985,7 +1004,7 @@ impl Board {
             attacker_piece = piece;
             occ ^= Bitboard::from(sq);
 
-            let next_attackers = self.attackers_to_color(target, occ, !side);
+            let next_attackers = self.legal_see_attackers(target, occ, !side);
             if (next_attackers & self.pieces(!side, Piece::King)).any() {
                 break;
             }
@@ -1113,6 +1132,8 @@ impl Board {
         let old_fullmove = self.fullmove;
         let old_hash = self.hash;
         let old_checkers = self.checkers;
+        let old_piece_threats = self.piece_threats;
+        let old_all_threats = self.all_threats;
         let mut captured = 255;
 
         // Halfmove clock: reset on pawn move or capture; increment otherwise.
@@ -1228,8 +1249,11 @@ impl Board {
             fullmove: old_fullmove,
             hash: old_hash,
             checkers: old_checkers,
+            piece_threats: old_piece_threats,
+            all_threats: old_all_threats,
         });
         self.checkers = self.calculate_checkers();
+        self.update_threats();
     }
 
     pub fn make_null_move(&mut self) {
@@ -1240,6 +1264,8 @@ impl Board {
         let old_fullmove = self.fullmove;
         let old_hash = self.hash;
         let old_checkers = self.checkers;
+        let old_piece_threats = self.piece_threats;
+        let old_all_threats = self.all_threats;
 
         if self.ep_sq != 255 {
             self.hash ^= ZOBRIST.ep(Square(self.ep_sq).file());
@@ -1259,8 +1285,11 @@ impl Board {
             fullmove: old_fullmove,
             hash: old_hash,
             checkers: old_checkers,
+            piece_threats: old_piece_threats,
+            all_threats: old_all_threats,
         });
         self.checkers = Bitboard::EMPTY;
+        self.update_threats();
     }
 
     pub fn unmake_null_move(&mut self) {
@@ -1276,6 +1305,8 @@ impl Board {
         self.fullmove = info.fullmove;
         self.hash = info.hash;
         self.checkers = info.checkers;
+        self.piece_threats = info.piece_threats;
+        self.all_threats = info.all_threats;
     }
 
     /// Undo the last move.
@@ -1299,6 +1330,8 @@ impl Board {
         self.fullmove = info.fullmove;
         self.hash = info.hash;
         self.checkers = info.checkers;
+        self.piece_threats = info.piece_threats;
+        self.all_threats = info.all_threats;
 
         // Move the piece back from `to` to `from`
         let moved_piece = if flags >= PROMO_KNIGHT {
@@ -1409,20 +1442,118 @@ impl Board {
 
     #[inline(always)]
     fn least_valuable_attacker(&self, attackers: Bitboard, color: Color) -> (Square, Piece) {
-        for piece in [
-            Piece::Pawn,
-            Piece::Knight,
-            Piece::Bishop,
-            Piece::Rook,
-            Piece::Queen,
-            Piece::King,
-        ] {
-            let bb = attackers & self.pieces(color, piece);
-            if bb.any() {
-                return (bb.lsb(), piece);
-            }
+        let pawns = attackers & self.pieces(color, Piece::Pawn);
+        if pawns.any() {
+            return (pawns.lsb(), Piece::Pawn);
+        }
+        let knights = attackers & self.pieces(color, Piece::Knight);
+        if knights.any() {
+            return (knights.lsb(), Piece::Knight);
+        }
+        let bishops = attackers & self.pieces(color, Piece::Bishop);
+        if bishops.any() {
+            return (bishops.lsb(), Piece::Bishop);
+        }
+        let rooks = attackers & self.pieces(color, Piece::Rook);
+        if rooks.any() {
+            return (rooks.lsb(), Piece::Rook);
+        }
+        let queens = attackers & self.pieces(color, Piece::Queen);
+        if queens.any() {
+            return (queens.lsb(), Piece::Queen);
+        }
+        let kings = attackers & self.pieces(color, Piece::King);
+        if kings.any() {
+            return (kings.lsb(), Piece::King);
         }
         unreachable!("least_valuable_attacker called with no attackers")
+    }
+
+    fn update_threats(&mut self) {
+        self.piece_threats = self.calculate_piece_threats(!self.side_to_move);
+        self.all_threats = self
+            .piece_threats
+            .iter()
+            .copied()
+            .fold(Bitboard::EMPTY, |acc, threats| acc | threats);
+    }
+
+    fn calculate_piece_threats(&self, attacker: Color) -> [Bitboard; 6] {
+        let atk = &*ATTACKS;
+        let occ = self.all_occ;
+        let mut threats = [Bitboard::EMPTY; 6];
+
+        let pawns = self.pieces(attacker, Piece::Pawn);
+        threats[Piece::Pawn as usize] = if attacker == Color::White {
+            pawns.north_east() | pawns.north_west()
+        } else {
+            pawns.south_east() | pawns.south_west()
+        };
+
+        let mut knights = self.pieces(attacker, Piece::Knight);
+        while knights.any() {
+            threats[Piece::Knight as usize] |= atk.knight(knights.pop_lsb());
+        }
+
+        let mut bishops = self.pieces(attacker, Piece::Bishop);
+        while bishops.any() {
+            threats[Piece::Bishop as usize] |= atk.bishop(bishops.pop_lsb(), occ);
+        }
+
+        let mut rooks = self.pieces(attacker, Piece::Rook);
+        while rooks.any() {
+            threats[Piece::Rook as usize] |= atk.rook(rooks.pop_lsb(), occ);
+        }
+
+        let mut queens = self.pieces(attacker, Piece::Queen);
+        while queens.any() {
+            let sq = queens.pop_lsb();
+            threats[Piece::Queen as usize] |= atk.bishop(sq, occ) | atk.rook(sq, occ);
+        }
+
+        threats[Piece::King as usize] = atk.king(self.king_sq(attacker));
+        threats
+    }
+
+    #[inline(always)]
+    fn legal_see_attackers(&self, target: Square, occ: Bitboard, color: Color) -> Bitboard {
+        let mut attackers = self.attackers_to_color(target, occ, color);
+        let mut legal = Bitboard::EMPTY;
+        while attackers.any() {
+            let from = attackers.pop_lsb();
+            if self.see_attacker_is_legal(from, target, occ, color) {
+                legal |= Bitboard::from(from);
+            }
+        }
+        legal
+    }
+
+    #[inline(always)]
+    fn see_attacker_is_legal(
+        &self,
+        from: Square,
+        target: Square,
+        occ: Bitboard,
+        color: Color,
+    ) -> bool {
+        let from_bb = Bitboard::from(from);
+        let target_bb = Bitboard::from(target);
+        let occ_after = (occ ^ from_bb) | target_bb;
+        let king = self.king_sq(color);
+        let them = !color;
+        let atk = &*ATTACKS;
+
+        if (from_bb & self.pieces(color, Piece::King)).any() {
+            return self.attackers_to_color(target, occ_after, them).is_empty();
+        }
+
+        let diagonal = (self.pieces(them, Piece::Bishop) | self.pieces(them, Piece::Queen))
+            & occ_after
+            & atk.bishop(king, occ_after);
+        let orthogonal = (self.pieces(them, Piece::Rook) | self.pieces(them, Piece::Queen))
+            & occ_after
+            & atk.rook(king, occ_after);
+        (diagonal | orthogonal).is_empty()
     }
 
     #[inline(always)]

@@ -8,6 +8,10 @@ use crate::board::Move;
 use crate::eval::MATE_SCORE;
 
 const MAX_PLY: i32 = 128;
+const BOUND_MASK: u8 = 0x03;
+const TT_PV_MASK: u8 = 0x04;
+const AGE_MASK: u8 = 0xF8;
+const AGE_INCREMENT: u8 = 0x08;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Bound {
@@ -19,7 +23,7 @@ pub enum Bound {
 impl Bound {
     #[inline(always)]
     fn from_bits(bits: u8) -> Option<Self> {
-        match bits & 3 {
+        match bits & BOUND_MASK {
             1 => Some(Self::Exact),
             2 => Some(Self::Upper),
             3 => Some(Self::Lower),
@@ -46,12 +50,17 @@ impl TtEntry {
 
     #[inline(always)]
     fn is_occupied(self) -> bool {
-        self.flag_age & 3 != 0
+        self.flag_age & BOUND_MASK != 0
     }
 
     #[inline(always)]
     pub fn best_move(self) -> Option<Move> {
         (self.mv != 0).then_some(Move(self.mv))
+    }
+
+    #[inline(always)]
+    pub fn tt_pv(self) -> bool {
+        self.flag_age & TT_PV_MASK != 0
     }
 }
 
@@ -226,13 +235,14 @@ impl TranspositionTable {
     pub fn new_search(&mut self) {
         match &mut self.storage {
             TtStorage::Local(table) => {
-                table.age = table.age.wrapping_add(4) & 0xFC;
+                table.age = table.age.wrapping_add(AGE_INCREMENT) & AGE_MASK;
             }
             TtStorage::Shared(table) => {
                 let age = table.age.load(Ordering::Relaxed);
-                table
-                    .age
-                    .store(age.wrapping_add(4) & 0xFC, Ordering::Relaxed);
+                table.age.store(
+                    age.wrapping_add(AGE_INCREMENT) & AGE_MASK,
+                    Ordering::Relaxed,
+                );
             }
         }
     }
@@ -275,13 +285,14 @@ impl TranspositionTable {
         mv: Move,
         ply: usize,
         static_eval: i32,
+        tt_pv: bool,
     ) {
         match &mut self.storage {
             TtStorage::Local(table) => {
-                store_local(table, key, depth, score, bound, mv, ply, static_eval);
+                store_local(table, key, depth, score, bound, mv, ply, static_eval, tt_pv);
             }
             TtStorage::Shared(table) => {
-                store_shared(table, key, depth, score, bound, mv, ply, static_eval);
+                store_shared(table, key, depth, score, bound, mv, ply, static_eval, tt_pv);
             }
         }
     }
@@ -343,7 +354,7 @@ fn prefetch_ptr<T>(ptr: *const T) {
 
 #[inline(always)]
 fn current_entry(entry: TtEntry, age: u8) -> bool {
-    entry.is_occupied() && (entry.flag_age & 0xFC) == age
+    entry.is_occupied() && (entry.flag_age & AGE_MASK) == age
 }
 
 pub fn score_to_tt(score: i32, ply: usize) -> i32 {
@@ -444,6 +455,7 @@ fn store_local(
     mv: Move,
     ply: usize,
     static_eval: i32,
+    tt_pv: bool,
 ) {
     let key16 = (key >> 48) as u16;
     let cluster = &mut table.clusters[key as usize & table.mask];
@@ -467,7 +479,16 @@ fn store_local(
     if replace.key16 == key16
         && bound != Bound::Exact
         && depth < replace.depth as i32 - 3
-        && (replace.flag_age & 0xFC) == table.age
+        && (replace.flag_age & AGE_MASK) == table.age
+    {
+        return;
+    }
+    if replace.key16 == key16
+        && replace.tt_pv()
+        && !tt_pv
+        && bound != Bound::Exact
+        && depth <= replace.depth as i32
+        && (replace.flag_age & AGE_MASK) == table.age
     {
         return;
     }
@@ -487,6 +508,7 @@ fn store_local(
         ply,
         static_eval,
         table.age,
+        tt_pv,
     );
 }
 
@@ -500,6 +522,7 @@ fn store_shared(
     mv: Move,
     ply: usize,
     static_eval: i32,
+    tt_pv: bool,
 ) {
     let age = table.age.load(Ordering::Relaxed);
     let key16 = (key >> 48) as u16;
@@ -529,7 +552,16 @@ fn store_shared(
     if replace_key == key
         && bound != Bound::Exact
         && depth < replace_entry.depth as i32 - 3
-        && (replace_entry.flag_age & 0xFC) == age
+        && (replace_entry.flag_age & AGE_MASK) == age
+    {
+        return;
+    }
+    if replace_key == key
+        && replace_entry.tt_pv()
+        && !tt_pv
+        && bound != Bound::Exact
+        && depth <= replace_entry.depth as i32
+        && (replace_entry.flag_age & AGE_MASK) == age
     {
         return;
     }
@@ -551,6 +583,7 @@ fn store_shared(
             ply,
             static_eval,
             age,
+            tt_pv,
         ),
     );
 }
@@ -565,6 +598,7 @@ fn make_entry(
     ply: usize,
     static_eval: i32,
     age: u8,
+    tt_pv: bool,
 ) -> TtEntry {
     TtEntry {
         key16,
@@ -572,7 +606,7 @@ fn make_entry(
         static_eval: static_eval.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
         mv,
         depth: depth.clamp(-1, i8::MAX as i32) as i8,
-        flag_age: age | bound as u8,
+        flag_age: age | if tt_pv { TT_PV_MASK } else { 0 } | bound as u8,
     }
 }
 
@@ -581,6 +615,6 @@ fn entry_quality(entry: TtEntry, age: u8) -> i32 {
     if !entry.is_occupied() {
         return i32::MIN;
     }
-    let age_delta = age.wrapping_sub(entry.flag_age & 0xFC) & 0xFC;
-    entry.depth as i32 - age_delta as i32 / 2
+    let age_delta = age.wrapping_sub(entry.flag_age & AGE_MASK) & AGE_MASK;
+    entry.depth as i32 + if entry.tt_pv() { 4 } else { 0 } - age_delta as i32 / 2
 }

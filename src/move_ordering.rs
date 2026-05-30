@@ -66,6 +66,7 @@ pub(crate) struct BadCapture {
     pub attacker: Piece,
     pub to: usize,
     pub captured: Option<Piece>,
+    pub to_threat: usize,
 }
 
 pub(crate) struct BadCaptureList {
@@ -83,12 +84,13 @@ impl BadCaptureList {
     }
 
     #[inline(always)]
-    pub fn push(&mut self, attacker: Piece, to: usize, captured: Option<Piece>) {
+    pub fn push(&mut self, attacker: Piece, to: usize, captured: Option<Piece>, to_threat: usize) {
         debug_assert!(self.len < self.items.len());
         self.items[self.len].write(BadCapture {
             attacker,
             to,
             captured,
+            to_threat,
         });
         self.len += 1;
     }
