@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::thread;
 
-use lynx::engine::Engine;
-use lynx::engine_command::{EngineCommandQueue, EngineControl};
-use lynx::infra::capitalize_first_letter;
-use lynx::uci_protocol::UciProtocol;
+use rarog::engine::Engine;
+use rarog::engine_command::{EngineCommandQueue, EngineControl};
+use rarog::infra::capitalize_first_letter;
+use rarog::uci_protocol::UciProtocol;
 
 fn main() {
     if !pext_build_is_supported() {
@@ -31,17 +31,17 @@ fn main() {
     engine_thread.join().expect("Engine thread failed.");
 }
 
-#[cfg(all(lynx_pext, target_arch = "x86_64"))]
+#[cfg(all(rarog_pext, target_arch = "x86_64"))]
 fn pext_build_is_supported() -> bool {
     std::is_x86_feature_detected!("bmi2")
 }
 
-#[cfg(all(lynx_pext, target_arch = "x86"))]
+#[cfg(all(rarog_pext, target_arch = "x86"))]
 fn pext_build_is_supported() -> bool {
     std::is_x86_feature_detected!("bmi2")
 }
 
-#[cfg(not(all(lynx_pext, any(target_arch = "x86", target_arch = "x86_64"))))]
+#[cfg(not(all(rarog_pext, any(target_arch = "x86", target_arch = "x86_64"))))]
 fn pext_build_is_supported() -> bool {
     true
 }

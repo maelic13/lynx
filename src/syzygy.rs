@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn tablebase_file_counts_scan_semicolon_separated_paths() {
         let base =
-            std::env::temp_dir().join(format!("lynx-syzygy-counts-{}-{}", std::process::id(), 1));
+            std::env::temp_dir().join(format!("rarog-syzygy-counts-{}-{}", std::process::id(), 1));
         let first = base.join("a");
         let second = base.join("b");
         fs::create_dir_all(&first).expect("create first temp tablebase directory");

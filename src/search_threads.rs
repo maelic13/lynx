@@ -118,7 +118,7 @@ impl Drop for WorkerPool {
 fn spawn_search_worker(index: usize) -> Option<SearchWorkerHandle> {
     let (sender, receiver) = mpsc::channel();
     let handle = thread::Builder::new()
-        .name(format!("lynx-search-{index}"))
+        .name(format!("rarog-search-{index}"))
         .spawn(move || {
             let mut worker = Searcher::worker_default();
             while let Ok(message) = receiver.recv() {

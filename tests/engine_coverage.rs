@@ -1,10 +1,10 @@
-use lynx::board::{Board, Color, GameResult, Move, Piece, Square};
-use lynx::engine_command::EngineCommand;
-use lynx::eval::{Evaluator, MATE_SCORE, piece_value};
-use lynx::search::{SearchEvent, SearchExit, Searcher};
-use lynx::search_options::SearchOptions;
-use lynx::syzygy;
-use lynx::tt::{Bound, TranspositionTable, score_from_tt, score_to_tt};
+use rarog::board::{Board, Color, GameResult, Move, Piece, Square};
+use rarog::engine_command::EngineCommand;
+use rarog::eval::{Evaluator, MATE_SCORE, piece_value};
+use rarog::search::{SearchEvent, SearchExit, Searcher};
+use rarog::search_options::SearchOptions;
+use rarog::syzygy;
+use rarog::tt::{Bound, TranspositionTable, score_from_tt, score_to_tt};
 
 fn args(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| (*part).to_string()).collect()

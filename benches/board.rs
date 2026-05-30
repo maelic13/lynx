@@ -1,8 +1,8 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use lynx::board::{Board, generate_captures, generate_legal_moves, perft};
-use lynx::eval::Evaluator;
+use rarog::board::{Board, generate_captures, generate_legal_moves, perft};
+use rarog::eval::Evaluator;
 
 const WARMUP: Duration = Duration::from_millis(150);
 const MEASURE: Duration = Duration::from_millis(750);
@@ -70,7 +70,7 @@ fn main() {
     ];
 
     println!();
-    println!("Lynx board benchmark");
+    println!("Rarog board benchmark");
     println!("positions: {}", BENCHMARK_FENS.len());
     println!("warmup: {} ms", WARMUP.as_millis());
     println!("measure: {} ms per workload", MEASURE.as_millis());

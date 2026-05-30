@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::Instant;
 
-use lynx::board::{Board, STARTING_FEN};
+use rarog::board::{Board, STARTING_FEN};
 
 const BENCHMARK_FENS: &[&str] = &[
     STARTING_FEN,

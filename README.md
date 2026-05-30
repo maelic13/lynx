@@ -1,8 +1,17 @@
-# Lynx
+# Rarog
 
-Lynx is a UCI-compatible chess engine written in Rust.
+<p align="center">
+  <img src="logo/rarog_detailed.png" alt="Rarog logo" width="260">
+</p>
+
+Rarog is a UCI-compatible chess engine written in Rust.
 The engine is intended for use from a chess GUI or engine-testing tool that
 speaks the UCI protocol.
+
+Rarog was released as Lynx through version `1.4.3`. The project was renamed
+starting with version `2.0.0` to avoid confusion with an existing chess engine.
+
+---
 
 ## Highlights
 
@@ -37,6 +46,8 @@ speaks the UCI protocol.
   with root DTZ ranking, WDL fallback, load summaries, and `tbhits` reporting
 - Built-in `bench` UCI command for repeatable search benchmarks
 
+---
+
 ## UCI Support
 
 Supported commands include:
@@ -67,11 +78,13 @@ Supported options:
 
 `SyzygyPath` may contain one or more Syzygy directories separated by the
 platform path separator (`;` on Windows, `:` on Unix-like systems). When the
-path is empty, tablebase probing is disabled. Lynx uses WDL probes inside the
+path is empty, tablebase probing is disabled. Rarog uses WDL probes inside the
 search and DTZ-ranked root probing when DTZ tables are available. If root DTZ
-probing is unavailable but WDL tables are present, Lynx falls back to WDL root
+probing is unavailable but WDL tables are present, Rarog falls back to WDL root
 move filtering. Search info includes `tbhits` when tablebase probes are used.
 Set `SyzygyProbeLimit` to `0` to disable probing without changing the path.
+
+---
 
 ## Bench
 
@@ -104,6 +117,8 @@ This benchmark measures legal move generation, direct legal move validation,
 capture generation, make/unmake, check detection, SEE over captures,
 game-simulation-style move generation, and start-position perft depth 4.
 
+---
+
 ## Build From Source
 
 Install Rust and Cargo, then build an optimized release binary:
@@ -114,12 +129,12 @@ cargo build --release
 
 The executable is created at:
 
-- `target/release/lynx`
-- `target/release/lynx.exe` on Windows
+- `target/release/rarog`
+- `target/release/rarog.exe` on Windows
 
 Release builds use LTO and a single codegen unit for engine speed.
 Local release builds also use `target-cpu=native`, so `cargo build --release`
-optimizes Lynx for the CPU on the build machine.
+optimizes Rarog for the CPU on the build machine.
 
 Portable release-asset builds can be produced with the cross-platform `xtask`
 helper:
@@ -154,6 +169,8 @@ For quick local testing:
 ```bash
 cargo run --release
 ```
+
+---
 
 ## Test
 
@@ -205,9 +222,11 @@ The suite covers:
 - TT-first move-picker behavior and TT-derived ponder fallback
 - UCI command handling and invalid `setoption` preservation
 
+---
+
 ## Use With A GUI
 
-1. Build or download a Lynx executable.
+1. Build or download a Rarog executable.
 2. Add it as a UCI engine in your chess GUI.
 3. Configure `Hash` and `Move Overhead` as needed.
 4. Start an engine game or analysis session.
@@ -215,19 +234,21 @@ The suite covers:
 Tested GUI families include Arena, ChessBase/Fritz, ChessOK Aquarium, and
 Hiarcs Chess Explorer. Other UCI-compatible GUIs should also work.
 
+---
+
 ## Releases
 
-Current documented release: `1.4.3`.
+Current documented release: `2.0.0`.
 
-`1.4.3` keeps the 1.4.2 release-asset set and adds a small retained search
-update: a wider ProbCut margin, less aggressive late-move pruning, and SEE-based
-capture ordering for profitable captures. PGO assets now include a `-pgo` suffix
-so they do not overwrite non-PGO builds in `target/dist`.
+`2.0.0` renames the project from Lynx to Rarog. The UCI engine identity,
+Cargo package, executable names, release assets, repository metadata, and
+documentation now use the Rarog name. Lynx releases remain available through
+`1.4.3`.
 
-- [Latest release](https://github.com/maelic13/lynx/releases/latest)
-- [All releases](https://github.com/maelic13/lynx/releases)
+- [Latest release](https://github.com/maelic13/rarog/releases/latest)
+- [All releases](https://github.com/maelic13/rarog/releases)
 
-Release-preparation checks for `1.4.3`:
+Release-preparation checks for `2.0.0`:
 
 ```bash
 cargo fmt --check
@@ -237,11 +258,11 @@ cargo xtask build --arch avx2 --target x86_64-pc-windows-msvc
 cargo xtask build --arch avx2 --target x86_64-pc-windows-msvc --pgo
 ```
 
-The `1.4.3` release-preparation work was also checked with internal `bench 13`,
-PGO/non-PGO speed comparisons, and Cutechess regression matches against the
-1.4.2 development baseline and Basilisk 1.4.9. Bench-only PGO remained faster
-than the tested Lynx-specific EPD PGO profile on the final 1.4.3 code, so the
-release build helper keeps bench-only PGO training.
+The final Lynx-branded release was `1.4.3`. It was checked with internal
+`bench 13`, PGO/non-PGO speed comparisons, and Cutechess regression matches
+against the 1.4.2 development baseline and Basilisk 1.4.9. Bench-only PGO
+remained faster than the tested Lynx-specific EPD PGO profile on the final
+1.4.3 code, so the release build helper keeps bench-only PGO training.
 
 Release assets may include standalone executables for Windows, Linux, and
 Apple Silicon macOS. Intel macOS release assets are not published.
@@ -260,13 +281,17 @@ Use the most advanced binary your CPU supports:
 
 If unsure, use the plain `x86-64` or `arm64` asset for your operating system.
 
+---
+
 ## License
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
 
+---
+
 ## Acknowledgements
 
-Lynx is an independent engine, but it benefits from the open chess-engine
+Rarog is an independent engine, but it benefits from the open chess-engine
 community's published ideas, testing practices, and protocol conventions.
 Special thanks to Stockfish and its team for the inspiration their work provides
 to chess engine authors and testers.

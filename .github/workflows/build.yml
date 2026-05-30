@@ -82,7 +82,7 @@ jobs:
         id: prepare-asset
         shell: bash
         run: |
-          asset_name="lynx-${{ github.event.release.tag_name }}-${{ matrix.os_name }}-${{ matrix.asset_arch }}${{ matrix.ext }}"
+          asset_name="rarog-${{ github.event.release.tag_name }}-${{ matrix.os_name }}-${{ matrix.asset_arch }}${{ matrix.ext }}"
           echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
 
       - name: Upload binary to GitHub release

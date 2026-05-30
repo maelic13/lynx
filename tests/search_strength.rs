@@ -1,7 +1,7 @@
-use lynx::board::{Board, Move};
-use lynx::eval::MATE_SCORE;
-use lynx::search::{SearchEvent, SearchResult, Searcher};
-use lynx::search_options::SearchOptions;
+use rarog::board::{Board, Move};
+use rarog::eval::MATE_SCORE;
+use rarog::search::{SearchEvent, SearchResult, Searcher};
+use rarog::search_options::SearchOptions;
 
 #[test]
 fn search_finds_fools_mate_in_one() {

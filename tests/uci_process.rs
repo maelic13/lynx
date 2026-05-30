@@ -4,15 +4,15 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use lynx::board::Board;
+use rarog::board::Board;
 
-fn run_lynx(input: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lynx"))
+fn run_rarog(input: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rarog"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("lynx binary should start");
+        .expect("Rarog binary should start");
 
     child
         .stdin
@@ -22,7 +22,7 @@ fn run_lynx(input: &str) -> Output {
         .expect("test input should be written");
     drop(child.stdin.take());
 
-    child.wait_with_output().expect("lynx should exit")
+    child.wait_with_output().expect("Rarog should exit")
 }
 
 fn stdout(output: &Output) -> String {
@@ -37,12 +37,12 @@ struct UciSession {
 
 impl UciSession {
     fn start() -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_lynx"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_rarog"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("lynx binary should start");
+            .expect("Rarog binary should start");
 
         let stdin = child.stdin.take().expect("stdin should be piped");
         let stdout = child.stdout.take().expect("stdout should be piped");
@@ -110,7 +110,7 @@ impl UciSession {
                 Ok(_) => {}
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    panic!("lynx stdout closed while checking for absence of `{needle}`");
+                    panic!("Rarog stdout closed while checking for absence of `{needle}`");
                 }
             }
         }
@@ -122,9 +122,9 @@ impl UciSession {
         assert!(
             self.child
                 .wait()
-                .expect("lynx process should be waitable")
+                .expect("Rarog process should be waitable")
                 .success(),
-            "lynx should exit successfully"
+            "Rarog should exit successfully"
         );
     }
 }
@@ -138,11 +138,11 @@ impl Drop for UciSession {
 
 #[test]
 fn uci_advertises_ponder_and_core_options() {
-    let output = run_lynx("uci\nquit\n");
+    let output = run_rarog("uci\nquit\n");
 
     assert!(output.status.success(), "status: {:?}", output.status);
     let out = stdout(&output);
-    assert!(out.contains("id name Lynx"));
+    assert!(out.contains("id name Rarog"));
     assert!(out.contains("option name Ponder type check default false"));
     assert!(out.contains("option name Hash type spin default 64 min 1 max 33554432"));
     assert!(out.contains("uciok"));
@@ -288,7 +288,7 @@ fn emitted_pvs_are_legal_for_tournament_positions_with_threads() {
 
 #[test]
 fn unknown_command_and_option_print_explicit_diagnostics() {
-    let output = run_lynx("setoption name Not A Real Option value 1\nunknownthing\nquit\n");
+    let output = run_rarog("setoption name Not A Real Option value 1\nunknownthing\nquit\n");
 
     assert!(output.status.success(), "status: {:?}", output.status);
     let out = stdout(&output);
@@ -298,7 +298,7 @@ fn unknown_command_and_option_print_explicit_diagnostics() {
 
 #[test]
 fn go_perft_runs_synchronously_before_following_quit() {
-    let output = run_lynx("go perft 1\nquit\n");
+    let output = run_rarog("go perft 1\nquit\n");
 
     assert!(output.status.success(), "status: {:?}", output.status);
     let out = stdout(&output);
@@ -308,7 +308,7 @@ fn go_perft_runs_synchronously_before_following_quit() {
 
 #[test]
 fn position_accepts_uppercase_move_text_before_perft() {
-    let output = run_lynx("position startpos moves E2E4\ngo perft 2\nquit\n");
+    let output = run_rarog("position startpos moves E2E4\ngo perft 2\nquit\n");
 
     assert!(output.status.success(), "status: {:?}", output.status);
     let out = stdout(&output);
@@ -317,7 +317,7 @@ fn position_accepts_uppercase_move_text_before_perft() {
 
 #[test]
 fn invalid_position_fen_is_a_critical_exit() {
-    let output = run_lynx("position fen invalid\n");
+    let output = run_rarog("position fen invalid\n");
 
     assert_eq!(output.status.code(), Some(1), "status: {:?}", output.status);
     let out = stdout(&output);

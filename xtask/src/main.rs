@@ -195,7 +195,7 @@ fn rustflags(arch: Arch) -> Vec<String> {
         Arch::Avx2 => vec!["-C".into(), "target-cpu=x86-64-v3".into()],
         Arch::Pext => vec![
             "--cfg".into(),
-            "lynx_pext".into(),
+            "rarog_pext".into(),
             "-C".into(),
             "target-cpu=x86-64-v3".into(),
             "-C".into(),
@@ -244,7 +244,7 @@ fn build_with_pgo(config: &Config) -> Result<()> {
     let instrumented = binary_path(&gen_target_dir, &config.target);
     run_training_bench(&instrumented, &raw_dir, config.bench_depth)?;
 
-    let profdata = pgo_dir.join("lynx.profdata");
+    let profdata = pgo_dir.join("rarog.profdata");
     merge_profiles(&llvm_profdata, &raw_dir, &profdata)?;
 
     let mut use_flags = vec![
@@ -276,7 +276,7 @@ fn cargo_build(
     };
 
     println_flush(format_args!(
-        "Building Lynx {} for {}{}",
+        "Building Rarog {} for {}{}",
         asset_arch_name(arch),
         target,
         if override_flags.is_empty() {
@@ -309,7 +309,7 @@ fn run_training_bench(binary: &Path, raw_dir: &Path, depth: u16) -> Result<()> {
     println_flush(format_args!(
         "Training PGO profile with internal bench depth {depth}"
     ));
-    let profile_pattern = raw_dir.join("lynx-%p-%m.profraw");
+    let profile_pattern = raw_dir.join("rarog-%p-%m.profraw");
     let mut child = Command::new(binary)
         .env("LLVM_PROFILE_FILE", &profile_pattern)
         .stdin(Stdio::piped())
@@ -523,7 +523,7 @@ fn binary_path(target_dir: &Path, target: &str) -> PathBuf {
     target_dir
         .join(target)
         .join("release")
-        .join(format!("lynx{}", exe_suffix(target)))
+        .join(format!("rarog{}", exe_suffix(target)))
 }
 
 fn copy_dist_binary(binary: &Path, arch: Arch, target: &str, pgo: bool) -> Result<()> {
@@ -556,7 +556,7 @@ fn println_flush(args: std::fmt::Arguments<'_>) {
 fn asset_name(arch: Arch, target: &str, pgo: bool) -> Result<String> {
     let pgo_suffix = if pgo { "-pgo" } else { "" };
     Ok(format!(
-        "lynx-v{}-{}-{}{}{}",
+        "rarog-v{}-{}-{}{}{}",
         package_version()?,
         os_name(target),
         asset_arch_name(arch),

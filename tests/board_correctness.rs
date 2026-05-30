@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use lynx::board::{Bitboard, Board, Color, GameResult, Move, Piece, STARTING_FEN, Square};
-use lynx::eval::piece_value;
+use rarog::board::{Bitboard, Board, Color, GameResult, Move, Piece, STARTING_FEN, Square};
+use rarog::eval::piece_value;
 
 const ORACLE_FENS: &[&str] = &[
     STARTING_FEN,
@@ -931,7 +931,7 @@ fn fullmove_counter_tracking() {
 #[test]
 fn castling_rights_cleared_by_king_move() {
     let mut board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
-    use lynx::board::CastlingRights;
+    use rarog::board::CastlingRights;
 
     assert!(board.castling.has(CastlingRights::WHITE_KINGSIDE));
     assert!(board.castling.has(CastlingRights::WHITE_QUEENSIDE));
@@ -954,7 +954,7 @@ fn castling_rights_cleared_by_king_move() {
 #[test]
 fn castling_rights_cleared_by_rook_move() {
     let mut board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").unwrap();
-    use lynx::board::CastlingRights;
+    use rarog::board::CastlingRights;
 
     // White h1 rook moves — only WHITE_KINGSIDE should be cleared
     board.play_uci("h1h2");
@@ -974,7 +974,7 @@ fn castling_rights_cleared_by_rook_move() {
 fn castling_rights_cleared_when_rook_is_captured() {
     // Black rook captures white a1 rook — should clear WHITE_QUEENSIDE
     let mut board = Board::from_fen("r3k3/8/8/8/8/8/8/R3K3 b Q - 0 1").unwrap();
-    use lynx::board::CastlingRights;
+    use rarog::board::CastlingRights;
 
     board.play_uci("a8a1");
     assert!(

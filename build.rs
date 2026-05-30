@@ -1,5 +1,5 @@
 fn main() {
-    println!("cargo:rustc-check-cfg=cfg(lynx_pext)");
+    println!("cargo:rustc-check-cfg=cfg(rarog_pext)");
 
     let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 

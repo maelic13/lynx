@@ -1,11 +1,11 @@
 [package]
-name = "lynx"
+name = "rarog"
 authors = ["Miloslav Macurek"]
-version = "1.4.3"
+version = "2.0.0"
 edition = "2024"
 description = "A UCI-compatible chess engine written in Rust"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/maelic13/lynx"
+repository = "https://github.com/maelic13/rarog"
 readme = "README.md"
 
 [workspace]

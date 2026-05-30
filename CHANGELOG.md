@@ -1,6 +1,20 @@
 # Changelog
 
-All notable changes to Lynx are documented in this file.
+All notable changes to Rarog are documented in this file.
+
+Rarog was released as Lynx through version `1.4.3`. The project was renamed
+starting with version `2.0.0` to avoid confusion with an existing chess engine.
+
+## [2.0.0] - 2026-05-29
+
+### Changed
+
+- Renamed the engine from Lynx to Rarog.
+- Updated the UCI engine identity, Cargo package name, executable name, release
+  asset names, repository metadata, documentation, tests, and build helpers for
+  the Rarog name.
+- Renamed the internal PEXT compile-time cfg from `lynx_pext` to
+  `rarog_pext`.
 
 ## [1.4.3] - 2026-05-29
 
