@@ -346,7 +346,7 @@ fn transposition_table_store_probe_replace_clear_and_mate_scores() {
     let key = 0x1234_0000_0000_0000;
     let best = Move::from_uci("e2e4").expect("valid UCI move");
 
-    table.store(key, 5, 123, Bound::Exact, best, 0, 42, false);
+    table.store(key, 5, 123, Bound::Exact, best, 0, 42);
     let entry = table.probe(key).expect("entry must be stored");
     assert_eq!(entry.score, 123);
     assert_eq!(entry.static_eval, 42);
@@ -354,7 +354,7 @@ fn transposition_table_store_probe_replace_clear_and_mate_scores() {
     assert_eq!(entry.bound(), Some(Bound::Exact));
     assert_eq!(entry.best_move(), Some(best));
 
-    table.store(0x5678_0000_0000_0001, 1, 1, Bound::Exact, best, 0, 0, false);
+    table.store(0x5678_0000_0000_0001, 1, 1, Bound::Exact, best, 0, 0);
     assert!(table.hashfull() > 0);
 
     assert!(!table.resize(usize::MAX));
@@ -368,7 +368,7 @@ fn transposition_table_store_probe_replace_clear_and_mate_scores() {
         table.probe(key).is_none(),
         "shared TT should not import local key16-only entries"
     );
-    table.store(key, 5, 123, Bound::Exact, best, 0, 42, false);
+    table.store(key, 5, 123, Bound::Exact, best, 0, 42);
     let shared_entry = table
         .probe(key)
         .expect("entry must be stored in shared table");
@@ -380,7 +380,7 @@ fn transposition_table_store_probe_replace_clear_and_mate_scores() {
         "shared TT must validate the full key"
     );
 
-    table.store(key, 4, 90, Bound::Upper, Move::NULL, 0, 11, false);
+    table.store(key, 4, 90, Bound::Upper, Move::NULL, 0, 11);
     let replaced = table.probe(key).expect("entry must remain present");
     assert_eq!(replaced.bound(), Some(Bound::Upper));
     assert_eq!(replaced.best_move(), Some(best));
@@ -410,8 +410,8 @@ fn transposition_table_hashfull_counts_only_current_generation_entries() {
     let second_fresh_key = 0xBABE_0000_0000_0004;
 
     let mut table = TranspositionTable::new(1);
-    table.store(key, 6, 12, Bound::Exact, best, 0, 34, false);
-    table.store(second_key, 5, 20, Bound::Upper, best, 0, 10, false);
+    table.store(key, 6, 12, Bound::Exact, best, 0, 34);
+    table.store(second_key, 5, 20, Bound::Upper, best, 0, 10);
     table.prefetch(key);
     assert!(table.hashfull() > 0);
 
@@ -426,14 +426,14 @@ fn transposition_table_hashfull_counts_only_current_generation_entries() {
         "stale hashfull accounting must not make entries unprobeable"
     );
 
-    table.store(fresh_key, 4, -8, Bound::Lower, best, 0, -10, false);
-    table.store(second_fresh_key, 3, -12, Bound::Exact, best, 0, -3, false);
+    table.store(fresh_key, 4, -8, Bound::Lower, best, 0, -10);
+    table.store(second_fresh_key, 3, -12, Bound::Exact, best, 0, -3);
     assert!(table.hashfull() > 0);
 
     let mut shared = TranspositionTable::new(1);
     shared.make_shared();
-    shared.store(key, 5, 99, Bound::Exact, best, 0, 11, false);
-    shared.store(second_key, 4, 88, Bound::Lower, best, 0, 22, false);
+    shared.store(key, 5, 99, Bound::Exact, best, 0, 11);
+    shared.store(second_key, 4, 88, Bound::Lower, best, 0, 22);
     shared.prefetch(key);
     assert!(shared.hashfull() > 0);
     shared.new_search();

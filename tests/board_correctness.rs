@@ -135,15 +135,6 @@ fn pseudo_legal_pinned_moves_are_rejected_as_illegal() {
 }
 
 #[test]
-fn see_ignores_pinned_recapturer() {
-    let board = Board::from_fen("k3r3/8/8/8/5n2/3P4/4B3/4K3 b - - 0 1").expect("valid FEN");
-    let mv = board.parse_move("f4d3").expect("Nxd3 must be legal");
-
-    assert!(board.see_ge(mv, 0));
-    assert!(board.see(mv) >= 0);
-}
-
-#[test]
 fn legal_move_validation_accepts_capturing_checker() {
     let mut board = Board::starting_position();
     for mv in [
@@ -586,8 +577,6 @@ struct Snapshot {
     hash: u64,
     in_check: bool,
     checkers: Bitboard,
-    all_threats: Bitboard,
-    piece_threats: [Bitboard; 6],
 }
 
 impl Snapshot {
@@ -597,15 +586,6 @@ impl Snapshot {
             hash: board.hash,
             in_check: board.is_in_check(),
             checkers: board.checkers(),
-            all_threats: board.all_threats(),
-            piece_threats: [
-                board.piece_threats(Piece::Pawn),
-                board.piece_threats(Piece::Knight),
-                board.piece_threats(Piece::Bishop),
-                board.piece_threats(Piece::Rook),
-                board.piece_threats(Piece::Queen),
-                board.piece_threats(Piece::King),
-            ],
         }
     }
 
@@ -621,23 +601,6 @@ impl Snapshot {
             board.checkers(),
             self.checkers,
             "{context} changed checker bitboard"
-        );
-        assert_eq!(
-            board.all_threats(),
-            self.all_threats,
-            "{context} changed all-threat bitboard"
-        );
-        assert_eq!(
-            [
-                board.piece_threats(Piece::Pawn),
-                board.piece_threats(Piece::Knight),
-                board.piece_threats(Piece::Bishop),
-                board.piece_threats(Piece::Rook),
-                board.piece_threats(Piece::Queen),
-                board.piece_threats(Piece::King),
-            ],
-            self.piece_threats,
-            "{context} changed piece-threat bitboards"
         );
     }
 }

@@ -9,13 +9,29 @@ pub const CONT_SIZE: usize = 6 * 64 * 6 * 64;
 pub const LOW_PLY_HISTORY_SIZE: usize = 8;
 pub const PAWN_HISTORY_SIZE: usize = 4_096;
 pub const PIECE_TO_SIZE: usize = 6 * 64;
+pub(crate) const CHECK_UNKNOWN: i8 = -1;
+pub(crate) const CHECK_FALSE: i8 = 0;
+pub(crate) const CHECK_TRUE: i8 = 1;
 
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone)]
 pub(crate) struct ScoredMove {
     pub mv: Move,
     pub score: i32,
     pub see: i16,
     pub quiet_history: i32,
+    pub gives_check: i8,
+}
+
+impl Default for ScoredMove {
+    fn default() -> Self {
+        Self {
+            mv: Move::NULL,
+            score: 0,
+            see: 0,
+            quiet_history: 0,
+            gives_check: CHECK_UNKNOWN,
+        }
+    }
 }
 
 pub(crate) struct ScoredMoveList {
@@ -39,12 +55,25 @@ impl ScoredMoveList {
 
     #[inline(always)]
     pub fn push_with_history(&mut self, mv: Move, score: i32, see: i32, quiet_history: i32) {
+        self.push_with_history_and_check(mv, score, see, quiet_history, CHECK_UNKNOWN);
+    }
+
+    #[inline(always)]
+    pub fn push_with_history_and_check(
+        &mut self,
+        mv: Move,
+        score: i32,
+        see: i32,
+        quiet_history: i32,
+        gives_check: i8,
+    ) {
         debug_assert!(self.len < self.moves.len());
         self.moves[self.len].write(ScoredMove {
             mv,
             score,
             see: see.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
             quiet_history,
+            gives_check,
         });
         self.len += 1;
     }
@@ -66,7 +95,6 @@ pub(crate) struct BadCapture {
     pub attacker: Piece,
     pub to: usize,
     pub captured: Option<Piece>,
-    pub to_threat: usize,
 }
 
 pub(crate) struct BadCaptureList {
@@ -84,13 +112,12 @@ impl BadCaptureList {
     }
 
     #[inline(always)]
-    pub fn push(&mut self, attacker: Piece, to: usize, captured: Option<Piece>, to_threat: usize) {
+    pub fn push(&mut self, attacker: Piece, to: usize, captured: Option<Piece>) {
         debug_assert!(self.len < self.items.len());
         self.items[self.len].write(BadCapture {
             attacker,
             to,
             captured,
-            to_threat,
         });
         self.len += 1;
     }
